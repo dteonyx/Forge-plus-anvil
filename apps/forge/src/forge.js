@@ -1580,6 +1580,48 @@ function confirmBox(title,msg,okLabel,fn){const p=document.createElement("p");p.
 let downloads=null,sampleFn=null;
 (async()=>{try{if(window.claude&&window.claude.use){downloads=await window.claude.use("downloads");}}catch(e){}})();
 (async()=>{try{if(window.claude&&window.claude.use){sampleFn=await window.claude.use("sample");}}catch(e){}})();
+// ---- Claude through the user's own Anthropic API key (web and desktop builds, where claude.ai's runtime isn't there).
+// The key is kept in this browser's storage on this device and is only ever sent to Anthropic's API.
+const API_KEY_STORE="forge-anthropic-key",API_MODEL_STORE="forge-anthropic-model";
+const API_MODELS=[["claude-sonnet-5-5","Sonnet 5.5 (recommended)"],["claude-opus-5-5","Opus 5.5 (best, costs more)"],["claude-haiku-5-5","Haiku 5.5 (fastest, cheapest)"]];
+const lsGet=k=>{try{return localStorage.getItem(k)||"";}catch(e){return "";}};
+const lsSet=(k,v)=>{try{if(v)localStorage.setItem(k,v);else localStorage.removeItem(k);}catch(e){}};
+const apiKey=()=>lsGet(API_KEY_STORE);
+const apiModel=()=>{const m=lsGet(API_MODEL_STORE);return API_MODELS.some(x=>x[0]===m)?m:API_MODELS[0][0];};
+async function apiSample(prompt,{signal,onText}={}){ // same shape as claude.ai's sample(): resolves {text}, rejects {code,message}
+  let res;
+  try{res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",signal,
+    headers:{"content-type":"application/json","x-api-key":apiKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+    body:JSON.stringify({model:apiModel(),max_tokens:16000,stream:true,messages:[{role:"user",content:prompt}]})});}
+  catch(e){if(e&&e.name==="AbortError")throw {code:"cancelled"};throw {code:"network",message:"Couldn't reach Anthropic's API. Check your internet connection."};}
+  if(!res.ok){let m="";try{const j=await res.json();m=(j&&j.error&&j.error.message)||"";}catch(e){}
+    if(res.status===401)throw {code:"bad_key",message:"Anthropic didn't accept the API key. Check it with the API key button."};
+    if(res.status===429)throw {code:"rate_limited"};
+    if(res.status>=500)throw {code:"overloaded",message:"Anthropic's API is busy right now. Try again in a minute."};
+    throw {code:"api_error",message:"The API refused the request"+(m?": "+m:".")};}
+  const reader=res.body.getReader(),dec=new TextDecoder();let buf="",text="";
+  try{for(;;){const {done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});
+    let i;while((i=buf.indexOf("\n"))>=0){const line=buf.slice(0,i).trim();buf=buf.slice(i+1);if(!line.startsWith("data:"))continue;
+      let ev;try{ev=JSON.parse(line.slice(5));}catch(e){continue;}
+      if(ev.type==="content_block_delta"&&ev.delta&&ev.delta.type==="text_delta"){text+=ev.delta.text;if(onText)onText({text});}
+      else if(ev.type==="error")throw {code:"api_error",message:(ev.error&&ev.error.message)||"The API stopped with an error."};}}}
+  catch(e){if(e&&e.name==="AbortError")throw {code:"cancelled"};throw e;}
+  return {text};
+}
+const getSampler=()=>sampleFn||(!inClaude()&&apiKey()?apiSample:null);
+function openApiKey(after){
+  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="12px";
+  body.innerHTML=`<p class="note">"Generate with Claude" outside claude.ai uses your own Anthropic API key. Create one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> (API keys). API use is billed by Anthropic, separately from a Claude subscription.</p>
+  <p class="note">The key is saved only in this browser on this device, and Forge only sends it to Anthropic's API.</p>`;
+  const key=document.createElement("input");key.type="password";key.id="apiKeyIn";key.autocomplete="off";key.spellcheck=false;key.placeholder="sk-ant-…";key.value=apiKey();
+  body.appendChild(field("API key",key));
+  body.appendChild(field("Model",sel_("apiModelIn",API_MODELS,apiModel(),()=>{})));
+  const btns=[];
+  if(apiKey())btns.push(button("Remove key",()=>{lsSet(API_KEY_STORE,"");closeModal();toast("API key removed from this browser.");if(after)after();}));
+  btns.push(button("Cancel",()=>{closeModal();if(after)after();}));
+  btns.push(button("Save",()=>{const v=key.value.trim();if(!v){key.focus();return;}lsSet(API_KEY_STORE,v);lsSet(API_MODEL_STORE,$("apiModelIn").value);closeModal();toast("API key saved in this browser.");if(after)after();},"primary"));
+  openModal("Claude API key",body,btns);setTimeout(()=>key.focus(),50);
+}
 // Where saves go: inside claude.ai the artifact runtime's "downloads" capability; anywhere else
 // (the web build, the desktop app) a normal browser download.
 const inClaude=()=>!!(window.claude&&window.claude.use);
@@ -1615,9 +1657,11 @@ function openGenerate(){
   const go=button("Generate with Claude",()=>runAI(go,stop),"primary");
   const stop=button("Stop",()=>{if(genCtl)genCtl.abort();});stop.hidden=true;
   const rnd=button(`Random layout`,()=>{const size=$("genSize").value,mode=$("genMode").value,add=$("genAdd").checked;const spec=randomSpec(genSeed++,size,mode);applySpec(spec,add,`Random layout #${genSeed-1}`);});
-  if(!sampleFn){go.disabled=true;go.title="Claude isn't reachable from this view. Open the page in claude.ai.";
-    if(!inClaude()){const o=body.querySelector("#genOut");o.hidden=false;o.textContent="Generate with Claude works in the claude.ai version of Forge. Random layout works everywhere.";}}
-  openModal("Generate a level",body,[rnd,stop,go]);
+  if(!getSampler()){go.disabled=true;go.title=inClaude()?"Claude isn't reachable from this view.":"Add your Anthropic API key first.";
+    if(!inClaude()){const o=body.querySelector("#genOut");o.hidden=false;o.textContent="Generate with Claude needs Claude: add your own Anthropic API key, or use the claude.ai version of Forge. Random layout works without either.";}}
+  const keyBtn=inClaude()?null:button(apiKey()?"API key ✓":"Add API key",()=>{const p=$("genPrompt").value;openApiKey(()=>{openGenerate();$("genPrompt").value=p;});});
+  if(keyBtn)keyBtn.id="genKey";
+  openModal("Generate a level",body,[...(keyBtn?[keyBtn]:[]),rnd,stop,go]);
   setTimeout(()=>$("genPrompt")&&$("genPrompt").focus(),50);
 }
 function applySpec(spec,add,label){
@@ -1668,7 +1712,7 @@ async function runAI(go,stop){
   const out=$("genOut");out.hidden=false;out.textContent="Thinking… (larger levels can take a minute)";
   go.disabled=true;stop.hidden=false;genCtl=new AbortController();
   try{
-    const res=await sampleFn(aiPrompt(desc,size,mode,add),{modelTier:"default",signal:genCtl.signal,cache:false,
+    const res=await getSampler()(aiPrompt(desc,size,mode,add),{modelTier:"default",signal:genCtl.signal,cache:false,
       onText:({text})=>{const rooms=(text.match(/"id"\s*:/g)||[]).length;out.textContent=`Laying out rooms… ${rooms} so far\n\n`+text.slice(-600);}});
     let t=res.text.trim().replace(/^```(json)?/i,"").replace(/```$/,"");const a=t.indexOf("{"),b=t.lastIndexOf("}");
     const spec=JSON.parse(t.slice(a,b+1));
@@ -2487,4 +2531,4 @@ status(legacy?"Restored your last level.":"Loaded the sample level “Cistern”
 (async()=>{try{const s=await idb.get("scenario");if(s){loadScenarioObject(JSON.parse(s));afterLoad(`Restored “${scenario.name}” (${scenario.levels.length} level${scenario.levels.length>1?"s":""}).`);fitView();}}catch(e){}})();
 restoreShapes().then(()=>{refreshShapesUI();let seen=false;try{seen=!!localStorage.getItem("forge-remake-setup");}catch(e){}if(!seen&&!GAME_IDS.some(g=>shapeStore[g])&&$("modal").hidden)openShapesDialog(true);});
 requestAnimationFrame(()=>{resize();fitView();});
-window.__forge={scenario,switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,shapeStore,texCount,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,newDoc,setDoc:d=>{doc=d;changed();}};
+window.__forge={scenario,switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,shapeStore,texCount,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,newDoc,setDoc:d=>{doc=d;changed();}};
