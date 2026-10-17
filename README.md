@@ -48,6 +48,10 @@ MARATHON_MAP="/path/to/Marathon Infinity/Map.sceA" npm test
 | `packages/formats` | Shared file-format code, moving out of Forge step by step |
 | `docs/` | Plan, format notes and the Extraction map conventions |
 
+## License
+
+GNU General Public License v3 or later, the same license as Aleph One. See `LICENSE`.
+
 ## Credits
 
 File formats were worked out from the open-source [Aleph One](https://github.com/Aleph-One-Marathon/alephone) and [Weland](https://github.com/treellama/weland) projects (both GPL), and checked against Bungie's released files. Marathon is a trademark of Bungie. This project isn't affiliated with Bungie.
