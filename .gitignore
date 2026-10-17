@@ -1,0 +1,12 @@
+node_modules/
+dist/
+test-results/
+playwright-report/
+.DS_Store
+# Bungie's game data never goes in the repo (Shapes, maps, sounds, physics)
+*.shpA
+*.shps
+*.sceA
+*.sndA
+*.phyA
+*.imgA
