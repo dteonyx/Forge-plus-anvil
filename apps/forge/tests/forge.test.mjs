@@ -156,3 +156,20 @@ test("Generate with Gemini works with a Gemini API key", async () => {
   assert.ok(await page.evaluate(() => window.__forge.doc.polys.length) >= 2);
   await page.evaluate(() => localStorage.clear());
 });
+
+test("Huge maps fill most of the map, and deathmatch maps stay smaller", async () => {
+  const r = await app.page.evaluate(() => {
+    const f = window.__forge;
+    const size = (mode) => {
+      f.applySpec(f.randomSpec(31337, "huge", mode), false, "test");
+      const xs = f.doc.pts.map((p) => p.x / 1024), ys = f.doc.pts.map((p) => p.y / 1024);
+      const fl = f.doc.polys.map((q) => q.floor / 1024);
+      return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys), climb: Math.max(...fl) - Math.min(...fl), errors: f.validate().filter((i) => i.lv === "error").length };
+    };
+    return { solo: size("extraction"), net: size("carnage") };
+  });
+  assert.ok(r.solo.w > 50 && r.solo.h > 50, `huge solo map spans ${r.solo.w.toFixed(1)} x ${r.solo.h.toFixed(1)} WU`);
+  assert.ok(r.solo.climb >= 4, "huge maps climb");
+  assert.ok(r.net.w < r.solo.w && r.net.h < r.solo.h, "deathmatch maps are smaller than solo maps");
+  assert.equal(r.solo.errors + r.net.errors, 0);
+});
