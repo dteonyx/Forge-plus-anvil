@@ -330,7 +330,7 @@ function validate(){
 // =============================================================== Extraction map conventions (MAP_CONVENTIONS.md, draft v0.1)
 // Labels are ordinary map annotations (NOTE chunk). Aleph One's Lua reads them with Annotations(),
 // and each one knows the polygon it sits in, so the label's anchor point must be inside walkable floor.
-const GEN_VERSION="0.2"; // 0.2: textures from curated palettes
+const GEN_VERSION="0.3"; // 0.2: textures from curated palettes; 0.3: bigger maps, taller climbs, huge size
 const LABELS=[["EXTRACT","Possible extraction point","#2fa860"],["LOOT","Loot cache spot","#d8a020"],["LOOT FAR","High-tier loot spot","#e0702a"],["CHIP","Data chip spot","#2aa8c8"],["SPAWN","Monster wave spawn point","#d8452f"],["NOSPAWN","Keep clear (safe room, drop zone)","#8a8a8a"]];
 const LABEL_WORDS=new Set(["EXTRACT","LOOT","CHIP","SPAWN","NOSPAWN"]);
 function parseLabel(text){const w=String(text||"").trim().split(/\s+/);return LABEL_WORDS.has(w[0])?{key:w[0],args:w.slice(1)}:null;}
@@ -898,7 +898,7 @@ function buildFromSpec(spec,{replace}={}){
   const roomPoly={};const report={rooms:0,skipped:[],objects:0};
   let hs=0;for(const ch of String(spec.seed??spec.name??"")) hs=(Math.imul(hs,31)+ch.charCodeAt(0))|0;
   const theme=texTheme(hs);const hash=s=>{let h=7^hs;for(const ch of String(s))h=(Math.imul(h,33)+ch.charCodeAt(0))|0;h^=h>>>16;h=Math.imul(h,0x7feb352d);h^=h>>>15;h=Math.imul(h,0x846ca68b);h^=h>>>16;return h>>>0;};
-  const rooms=(spec.rooms||[]).slice(0,120);
+  const rooms=(spec.rooms||[]).slice(0,400);
   for(const r of rooms){
     const x=q(r.x),y=q(r.y),w=q(r.w),h=q(r.h);
     if(![x,y,w,h].every(Number.isFinite)||w<128||h<128){report.skipped.push(r.id+" (bad size)");continue;}
@@ -916,7 +916,7 @@ function buildFromSpec(spec,{replace}={}){
     if(poly){roomPoly[r.id]=poly;report.rooms++;}
   }
   for(const p of [...doc.polys])if(p.verts.length>8)splitPolygon(p);
-  for(const o of (spec.objects||[]).slice(0,200)){
+  for(const o of (spec.objects||[]).slice(0,400)){
     const room=roomPoly[o.room];if(!room)continue;
     const xs=room.verts.map(v=>v.x),ys=room.verts.map(v=>v.y);
     const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
@@ -993,17 +993,26 @@ function texTheme(seed){const p=texPalette();if(!p)return null;const R=mulberry(
 function mulberry(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
 function randomSpec(seed,size,mode){
   const R=mulberry(seed),pick=a=>a[Math.floor(R()*a.length)],rr=(a,b,s=0.5)=>Math.round((a+R()*(b-a))/s)*s;
-  const target={small:8,medium:16,large:28}[size]||16;
-  const rooms=[],big=[];const LIM=24;
+  // Sizes measured against Bungie's Infinity levels. Solo levels (33): typically ~50x58 WU, 440 polygons, 10 WU of climb,
+  // 54 monsters; the biggest fill the map (the limit is about ±31 WU). Net-only levels (24): typically ~31x31 WU,
+  // 140 polygons, 4 WU of climb; the biggest ~46 WU across. Solo/extraction "large" ~ a typical solo level, "huge" ~ the
+  // biggest; carnage "large" ~ a typical-to-big net level, "huge" ~ the biggest.
+  const SOLO={small:{t:8,lim:16,room:[3,8],climb:1,tries:600},medium:{t:16,lim:22,room:[3,9],climb:1.5,tries:800},large:{t:30,lim:27,room:[3,11],climb:2.5,tries:1200},huge:{t:70,lim:30,room:[3,12],climb:3,tries:2500}};
+  const NET={small:{t:6,lim:13,room:[3,7],climb:0.75,tries:600},medium:{t:11,lim:17,room:[3,8],climb:1,tries:800},large:{t:18,lim:22,room:[3,9],climb:1.5,tries:1000},huge:{t:28,lim:26,room:[3,11],climb:2,tries:1500}};
+  const SZ=(mode==="carnage"?NET:SOLO)[size]||SOLO.medium;
+  const target=SZ.t;
+  const rooms=[],big=[];const LIM=SZ.lim;
   const overlaps=(r)=>rooms.some(o=>r.x<o.x+o.w-1e-6&&o.x<r.x+r.w-1e-6&&r.y<o.y+o.h-1e-6&&o.y<r.y+r.h-1e-6);
   const inb=r=>r.x>-LIM&&r.y>-LIM&&r.x+r.w<LIM&&r.y+r.h<LIM;
   const first={id:"R0",x:-3,y:-3,w:6,h:6,floor:0,ceiling:2,light:90};rooms.push(first);big.push(first);
   let n=1,tries=0;
-  while(big.length<target&&tries++<600){
+  while(big.length<target&&tries++<SZ.tries){
     const from=pick(big),side=Math.floor(R()*4);
-    const cw=pick([1,1,1.5,2]),clen=rr(1.5,5);
-    const delta=pick([0,0,0,0.5,-0.5,1,0.25]);
-    const steps=delta===0?1:Math.max(1,Math.min(Math.round(Math.abs(delta)/0.25),Math.floor(clen/0.5)));
+    const cw=pick([1,1,1.5,2]);
+    // height change along this corridor: often flat, sometimes a short step, sometimes a long staircase (bigger maps climb more)
+    const climb=R()<0.3?0:pick([0.25,0.5,0.5,1,1,SZ.climb,SZ.climb]);const delta=(R()<0.55?1:-1)*climb;
+    const steps=delta===0?1:Math.round(Math.abs(delta)/0.25); // each stair step rises at most 0.25 WU, which players can walk up
+    const clen=Math.max(rr(1.5,5),steps*0.5);
     const horiz=side%2===1; // 1=east,3=west ; 0=north,2=south
     const span=horiz?from.h:from.w;if(span<cw+0.5)continue;
     const along=(horiz?from.y:from.x)+rr(0.25,span-cw-0.25,0.25);
@@ -1018,7 +1027,8 @@ function randomSpec(seed,size,mode){
       segs.push({...r,floor:+f.toFixed(3),ceiling:+(f+1.2).toFixed(3),light:Math.round(rr(50,85,5))});
     }
     const end=segs[segs.length-1];
-    const rw=rr(3,9),rh=rr(3,9);
+    const hall=SZ.t>=30&&R()<0.15; // big halls on large and huge maps
+    const rw=hall?rr(9,15):rr(...SZ.room),rh=hall?rr(9,15):rr(...SZ.room);
     let room;
     if(side===1)room={x:end.x+end.w,y:end.y-rr(0,rh-cw,0.25),w:rw,h:rh};
     else if(side===3)room={x:end.x-rw,y:end.y-rr(0,rh-cw,0.25),w:rw,h:rh};
@@ -1027,7 +1037,7 @@ function randomSpec(seed,size,mode){
     if(horiz&&(room.y>end.y||room.y+room.h<end.y+cw))continue;
     if(!horiz&&(room.x>end.x||room.x+room.w<end.x+cw))continue;
     const fl=from.floor+delta;
-    Object.assign(room,{id:"R"+n,floor:fl,ceiling:fl+pick([1.5,2,2,3]),light:Math.round(rr(55,95,5))}); // textures come from the level theme in buildFromSpec
+    Object.assign(room,{id:"R"+n,floor:fl,ceiling:fl+(hall?pick([3,4,5]):pick([1.5,2,2,3])),light:Math.round(rr(55,95,5))}); // textures come from the level theme in buildFromSpec
     const all=[...segs,room];
     if(!all.every(inb)||all.some(overlaps))continue;
     // pits: occasionally sink part of a big room
@@ -1038,7 +1048,7 @@ function randomSpec(seed,size,mode){
   const foes=["FighterMinor","FighterMajor","FighterMinorProjectile","CompilerMinor","TrooperMinor","DroneMinor","EnforcerMinor","HunterMinor","TickKamikaze","CyborgMinor"];
   const loot=["MagnumMagazine","AssaultRifle","AssaultRifleMagazine","AssaultGrenades","Shotgun","ShotgunShells","FusionPistol","FusionBattery","Shield1x","Oxygen","RocketLauncher","Rockets","Shield2x"];
   big.slice(1).forEach(r=>{
-    if(mode!=="carnage"&&R()<0.75)for(let k=0;k<1+Math.floor(R()*3);k++)objects.push({kind:"monster",what:pick(foes),room:r.id,dx:rr(0.2,0.8,0.1),dy:rr(0.2,0.8,0.1),facing:Math.floor(R()*360)});
+    if(mode!=="carnage"&&R()<0.75)for(let k=0;k<1+Math.floor(R()*(SZ.t>=30?4:3));k++)objects.push({kind:"monster",what:pick(foes),room:r.id,dx:rr(0.2,0.8,0.1),dy:rr(0.2,0.8,0.1),facing:Math.floor(R()*360)});
     if(R()<0.7)objects.push({kind:"item",what:pick(loot),room:r.id,dx:rr(0.2,0.8,0.1),dy:rr(0.2,0.8,0.1)});
   });
   if(big.length>4&&R()<0.6){const r=pick(big.slice(1));r.type="minor_ouch";r.light=50;}
@@ -1691,7 +1701,7 @@ function openGenerate(){
   <textarea id="genPrompt" placeholder="e.g. A three-floor reactor core with stairs spiralling up the outside walls"></textarea>
   <div class="chips" id="genIdeas"></div>
   <div class="row" style="gap:14px;align-items:center">
-    <label class="checks"><span class="lbl note">Size</span> <select id="genSize"><option value="small">Small</option><option value="medium" selected>Medium</option><option value="large">Large</option></select></label>
+    <label class="checks"><span class="lbl note">Size</span> <select id="genSize"><option value="small">Small</option><option value="medium" selected>Medium</option><option value="large">Large</option><option value="huge">Huge</option></select></label>
     <label class="checks"><span class="note">Mode</span> <select id="genMode"><option value="solo">Solo / co-op</option><option value="extraction">Extraction (co-op)</option><option value="carnage">Carnage</option></select></label>
     <label class="checks"><input type="checkbox" id="genAdd"> Add to the current map</label>
   </div>
@@ -1719,7 +1729,10 @@ function applySpec(spec,add,label){
   status(rep.skipped.length?`Skipped rooms: ${rep.skipped.slice(0,6).join(", ")}${rep.skipped.length>6?"…":""}`:(spec.notes||"Generated."));
 }
 function aiPrompt(desc,size,mode,add){
-  const counts={small:"6 to 12",medium:"12 to 25",large:"25 to 45"}[size];
+  // Bungie's deathmatch levels are much smaller than its solo levels, so carnage gets its own scale
+  const net=mode==="carnage";
+  const counts=(net?{small:"5 to 10",medium:"10 to 18",large:"18 to 30",huge:"30 to 45"}:{small:"6 to 12",medium:"12 to 25",large:"25 to 45",huge:"45 to 80"})[size];
+  const extent=(net?{small:"-12..12",medium:"-16..16",large:"-21..21",huge:"-25..25"}:{small:"-14..14",medium:"-20..20",large:"-26..26",huge:"-29..29"})[size]||"-26..26";
   let existing="";
   if(add&&doc.polys.length){existing="\n\nThe map already has these occupied areas (axis-aligned bounding boxes in WU; x,y = top-left). New rooms MUST NOT overlap them, and should connect by sharing an edge with one of them:\n"+
     doc.polys.slice(0,80).map((q,i)=>{const xs=q.verts.map(v=>v.x/WU),ys=q.verts.map(v=>v.y/WU);const x=Math.min(...xs),y=Math.min(...ys);return `E${i}: x=${x.toFixed(2)} y=${y.toFixed(2)} w=${(Math.max(...xs)-x).toFixed(2)} h=${(Math.max(...ys)-y).toFixed(2)} floor=${fmt(q.floor)} ceiling=${fmt(q.ceil)}`;}).join("\n");}
@@ -1732,11 +1745,12 @@ Size: ${counts} rooms (corridors and stair steps count as rooms).${existing}
 Units are world units (WU). 1 WU is about a doorway's width; a player is 0.8 WU tall and can step up at most 0.25 WU between neighbouring floors. y grows downward (south). Every coordinate, width, height and floor/ceiling value must be a multiple of 0.25.
 
 Rules:
-- Each room is a rectangle {x, y, w, h} where x,y is its top-left corner. Keep everything within -26..26 on both axes.
+- Each room is a rectangle {x, y, w, h} where x,y is its top-left corner. Keep everything within ${extent} on both axes, and use most of that space.
 - Rooms must never overlap. Rooms connect only where they share part of an edge (touching edges become openings). Leave gaps between rooms you don't want connected.
 - Corridors are narrow rooms (width 1 to 2). Build stairs as a row of small rooms each rising 0.25 (e.g. 0.5 deep each).
 - Ceilings must be at least 1 WU above floors where the player walks. Big halls can have tall ceilings (3 to 5).
 - Raised ledges more than 0.25 above a neighbour can only be reached by stairs; use that for interesting verticality.
+- ${net?"Bungie's deathmatch levels still climb: floors typically span 3 to 8 WU. Use loops so players can circle around, and stairs between levels.":"Bungie's solo levels climb a lot: floors typically span 8 to 15 WU from the lowest to the highest point. Use long staircases, upper floors and deep pits."}${size==="large"||size==="huge"?" Include a few big halls (10 to 16 WU across, ceilings 3 to 5 WU).":""}
 - light is 0-100 percent. Vary it for mood.
 - type is one of: normal, minor_ouch, major_ouch, hill, base, goal, glue, superglue, exit, zone_border, item_impassable, monster_impassable. Use minor_ouch/major_ouch for lava or acid pits (lower floor than surroundings).
 - Objects go in rooms using dx, dy (0..1 relative position in the room). facing is degrees clockwise from east.
