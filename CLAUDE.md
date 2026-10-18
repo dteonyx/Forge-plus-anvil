@@ -17,7 +17,7 @@ The owner is a hobbyist who tests in the real game on Windows. Keep explanations
 - Tests serve the source directly with an import map: the real three.js when installed, else `tests/support/three-stub.mjs`.
 - `MARATHON_MAP=/path/Map.sceA npm test` adds the Bungie Infinity round-trip test.
 - `window.__forge` exposes the main functions for tests.
-- The editor also runs as a claude.ai artifact. There, saving uses the artifact `downloads` capability (exports go in a zip) and "Generate with Claude" uses `sample`. Elsewhere it uses browser downloads and saves `.sceA` directly, and "Generate with Claude" calls Anthropic's API with the user's own key (kept in localStorage, sent only to api.anthropic.com; `apiSample` in forge.js). Never ship a key in the repo or the site.
+- The editor also runs as a claude.ai artifact. There, saving uses the artifact `downloads` capability (exports go in a zip) and "Generate with Claude" uses `sample`. Elsewhere it uses browser downloads and saves `.sceA` directly, and AI generation calls Gemini (Google, default for new users because of its free tier) or Claude (Anthropic) with the user's own key, kept in localStorage and sent only to that provider (`AI_PROVIDERS`, `geminiSample`, `anthropicSample` in forge.js). Gemini model IDs come from ai.google.dev/gemini-api/docs/models; check them when they age. Never ship a key in the repo or the site.
 
 ## Docs
 

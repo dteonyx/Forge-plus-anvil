@@ -14,7 +14,7 @@ Remakes of Bungie's Marathon editing tools for [Aleph One](https://alephone.lhow
 - Real textures from **your own** Shapes files for Marathon, Durandal and Infinity (Aleph One Shapes work too).
 - Doors, lifts, liquids, terminals with pictures, chapter screens, per-level physics, whole scenarios.
 - Opens Bungie's maps. Export → re-open → export of Infinity's 57-level map is byte-identical.
-- Random level generator, and Claude level generation: built in on claude.ai, or with your own Anthropic API key on the web version (the key stays in your browser).
+- Random level generator, and AI level generation: Claude built in on claude.ai, or on the web version with your own API key: **Gemini** (Google, has a free tier: get a key at aistudio.google.com) or **Claude** (Anthropic). The key stays in your browser.
 - Extraction mode support: map labels, co-op checks, labelled generated maps (see `docs/MAP_CONVENTIONS.md`).
 - Retro (System 7) or modern look, light or dark.
 

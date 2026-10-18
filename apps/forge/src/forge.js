@@ -1580,47 +1580,90 @@ function confirmBox(title,msg,okLabel,fn){const p=document.createElement("p");p.
 let downloads=null,sampleFn=null;
 (async()=>{try{if(window.claude&&window.claude.use){downloads=await window.claude.use("downloads");}}catch(e){}})();
 (async()=>{try{if(window.claude&&window.claude.use){sampleFn=await window.claude.use("sample");}}catch(e){}})();
-// ---- Claude through the user's own Anthropic API key (web and desktop builds, where claude.ai's runtime isn't there).
-// The key is kept in this browser's storage on this device and is only ever sent to Anthropic's API.
-const API_KEY_STORE="forge-anthropic-key",API_MODEL_STORE="forge-anthropic-model";
-const API_MODELS=[["claude-sonnet-5-5","Sonnet 5.5 (recommended)"],["claude-opus-5-5","Opus 5.5 (best, costs more)"],["claude-haiku-5-5","Haiku 5.5 (fastest, cheapest)"]];
+// ---- AI through the user's own API key (web and desktop builds, where claude.ai's runtime isn't there).
+// Two providers: Claude (Anthropic) and Gemini (Google, which has a free tier). Keys are kept in this browser's
+// storage on this device and are only ever sent to that provider's API.
+const AI_PROVIDERS={
+  gemini:{name:"Gemini",long:"Gemini (Google)",keyStore:"forge-gemini-key",modelStore:"forge-gemini-model",hint:"AIza…",
+    models:[["gemini-3.8-flash","Gemini 3.8 Flash (free tier, recommended)"],["gemini-3.5-flash-lite","Gemini 3.5 Flash-Lite (free tier, fastest)"],["gemini-4-argon","Gemini 4 Argon (paid only, best)"]],
+    help:`Get a key at <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com</a> (Get API key). Gemini has a free tier with daily limits. On the free tier, Google may use what you send to improve its products.`},
+  anthropic:{name:"Claude",long:"Claude (Anthropic)",keyStore:"forge-anthropic-key",modelStore:"forge-anthropic-model",hint:"sk-ant-…",
+    models:[["claude-sonnet-5-5","Sonnet 5.5 (recommended)"],["claude-opus-5-5","Opus 5.5 (best, costs more)"],["claude-haiku-5-5","Haiku 5.5 (fastest, cheapest)"]],
+    help:`Get a key at <a href="https://platform.claude.com/settings/keys" target="_blank" rel="noopener">platform.claude.com</a> (API keys). API use is billed by Anthropic, separately from a Claude subscription.`}};
+const AI_PROVIDER_STORE="forge-ai-provider";
 const lsGet=k=>{try{return localStorage.getItem(k)||"";}catch(e){return "";}};
 const lsSet=(k,v)=>{try{if(v)localStorage.setItem(k,v);else localStorage.removeItem(k);}catch(e){}};
-const apiKey=()=>lsGet(API_KEY_STORE);
-const apiModel=()=>{const m=lsGet(API_MODEL_STORE);return API_MODELS.some(x=>x[0]===m)?m:API_MODELS[0][0];};
-async function apiSample(prompt,{signal,onText}={}){ // same shape as claude.ai's sample(): resolves {text}, rejects {code,message}
-  let res;
-  try{res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",signal,
-    headers:{"content-type":"application/json","x-api-key":apiKey(),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
-    body:JSON.stringify({model:apiModel(),max_tokens:16000,stream:true,messages:[{role:"user",content:prompt}]})});}
-  catch(e){if(e&&e.name==="AbortError")throw {code:"cancelled"};throw {code:"network",message:"Couldn't reach Anthropic's API. Check your internet connection."};}
+// Default provider: what the user picked; else Claude if they already saved a Claude key; else Gemini (free tier).
+const aiProvider=()=>{const p=lsGet(AI_PROVIDER_STORE);if(AI_PROVIDERS[p])return p;return lsGet(AI_PROVIDERS.anthropic.keyStore)?"anthropic":"gemini";};
+const aiKey=(p=aiProvider())=>lsGet(AI_PROVIDERS[p].keyStore);
+const aiModel=(p=aiProvider())=>{const P=AI_PROVIDERS[p],m=lsGet(P.modelStore);return P.models.some(x=>x[0]===m)?m:P.models[0][0];};
+const aiName=()=>sampleFn?"Claude":AI_PROVIDERS[aiProvider()].name;
+async function apiFetch(url,init){
+  try{return await fetch(url,init);}
+  catch(e){if(e&&e.name==="AbortError")throw {code:"cancelled"};throw {code:"network",message:"Couldn't reach the AI service. Check your internet connection."};}
+}
+async function readSSE(res,onEvent){ // calls onEvent(parsed JSON) for each "data:" line of a server-sent event stream
+  const reader=res.body.getReader(),dec=new TextDecoder();let buf="";
+  try{for(;;){const {done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});
+    let i;while((i=buf.indexOf("\n"))>=0){const line=buf.slice(0,i).trim();buf=buf.slice(i+1);if(!line.startsWith("data:"))continue;
+      let ev;try{ev=JSON.parse(line.slice(5));}catch(e){continue;}onEvent(ev);}}}
+  catch(e){if(e&&e.name==="AbortError")throw {code:"cancelled"};throw e;}
+}
+async function anthropicSample(prompt,{signal,onText}){
+  const res=await apiFetch("https://api.anthropic.com/v1/messages",{method:"POST",signal,
+    headers:{"content-type":"application/json","x-api-key":aiKey("anthropic"),"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},
+    body:JSON.stringify({model:aiModel("anthropic"),max_tokens:16000,stream:true,messages:[{role:"user",content:prompt}]})});
   if(!res.ok){let m="";try{const j=await res.json();m=(j&&j.error&&j.error.message)||"";}catch(e){}
     if(res.status===401)throw {code:"bad_key",message:"Anthropic didn't accept the API key. Check it with the API key button."};
     if(res.status===429)throw {code:"rate_limited"};
     if(res.status>=500)throw {code:"overloaded",message:"Anthropic's API is busy right now. Try again in a minute."};
     throw {code:"api_error",message:"The API refused the request"+(m?": "+m:".")};}
-  const reader=res.body.getReader(),dec=new TextDecoder();let buf="",text="";
-  try{for(;;){const {done,value}=await reader.read();if(done)break;buf+=dec.decode(value,{stream:true});
-    let i;while((i=buf.indexOf("\n"))>=0){const line=buf.slice(0,i).trim();buf=buf.slice(i+1);if(!line.startsWith("data:"))continue;
-      let ev;try{ev=JSON.parse(line.slice(5));}catch(e){continue;}
-      if(ev.type==="content_block_delta"&&ev.delta&&ev.delta.type==="text_delta"){text+=ev.delta.text;if(onText)onText({text});}
-      else if(ev.type==="error")throw {code:"api_error",message:(ev.error&&ev.error.message)||"The API stopped with an error."};}}}
-  catch(e){if(e&&e.name==="AbortError")throw {code:"cancelled"};throw e;}
+  let text="";
+  await readSSE(res,ev=>{
+    if(ev.type==="content_block_delta"&&ev.delta&&ev.delta.type==="text_delta"){text+=ev.delta.text;if(onText)onText({text});}
+    else if(ev.type==="error")throw {code:"api_error",message:(ev.error&&ev.error.message)||"The API stopped with an error."};});
   return {text};
 }
-const getSampler=()=>sampleFn||(!inClaude()&&apiKey()?apiSample:null);
+async function geminiSample(prompt,{signal,onText}){
+  const model=aiModel("gemini");
+  const res=await apiFetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`,{method:"POST",signal,
+    headers:{"content-type":"application/json","x-goog-api-key":aiKey("gemini")},
+    body:JSON.stringify({contents:[{role:"user",parts:[{text:prompt}]}],generationConfig:{maxOutputTokens:32768,responseMimeType:"application/json"}})});
+  if(!res.ok){let m="";try{const j=await res.json();m=(j&&j.error&&j.error.message)||"";}catch(e){}
+    if(res.status===401||res.status===403||/API key/i.test(m))throw {code:"bad_key",message:"Google didn't accept the Gemini API key. Check it with the API key button."};
+    if(res.status===429)throw {code:"rate_limited",message:"Gemini's usage limit was reached (the free tier has daily limits). Try again later, or pick another Gemini model."};
+    if(res.status>=500)throw {code:"overloaded",message:"Gemini is busy right now. Try again in a minute."};
+    throw {code:"api_error",message:"Gemini refused the request"+(m?": "+m:".")};}
+  let text="";
+  await readSSE(res,ev=>{
+    if(ev.error)throw {code:"api_error",message:ev.error.message||"Gemini stopped with an error."};
+    for(const c of ev.candidates||[])for(const part of (c.content&&c.content.parts)||[])
+      if(typeof part.text==="string"&&!part.thought){text+=part.text;if(onText)onText({text});}});
+  return {text};
+}
+// same shape as claude.ai's sample(): resolves {text}, rejects {code,message}
+const apiSample=(prompt,opts={})=>aiProvider()==="gemini"?geminiSample(prompt,opts):anthropicSample(prompt,opts);
+const getSampler=()=>sampleFn||(!inClaude()&&aiKey()?apiSample:null);
 function openApiKey(after){
+  let prov=aiProvider();
   const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="12px";
-  body.innerHTML=`<p class="note">"Generate with Claude" outside claude.ai uses your own Anthropic API key. Create one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a> (API keys). API use is billed by Anthropic, separately from a Claude subscription.</p>
-  <p class="note">The key is saved only in this browser on this device, and Forge only sends it to Anthropic's API.</p>`;
-  const key=document.createElement("input");key.type="password";key.id="apiKeyIn";key.autocomplete="off";key.spellcheck=false;key.placeholder="sk-ant-…";key.value=apiKey();
+  const top=document.createElement("p");top.className="note";top.textContent="Generating levels outside claude.ai uses your own API key, from Google (Gemini) or Anthropic (Claude).";body.appendChild(top);
+  const provSel=sel_("apiProvider",Object.entries(AI_PROVIDERS).map(([k,P])=>[k,P.long]),prov,v=>{prov=v;fill();});
+  body.appendChild(field("Use",provSel));
+  const help=document.createElement("p");help.className="note";body.appendChild(help);
+  const key=document.createElement("input");key.type="password";key.id="apiKeyIn";key.autocomplete="off";key.spellcheck=false;
   body.appendChild(field("API key",key));
-  body.appendChild(field("Model",sel_("apiModelIn",API_MODELS,apiModel(),()=>{})));
+  const modelBox=document.createElement("div");body.appendChild(modelBox);
+  const priv=document.createElement("p");priv.className="note";priv.textContent="Keys are saved only in this browser on this device, and Forge only sends each key to its own service.";body.appendChild(priv);
+  function fill(){const P=AI_PROVIDERS[prov];help.innerHTML=P.help;key.placeholder=P.hint;key.value=aiKey(prov);
+    modelBox.replaceChildren(field("Model",sel_("apiModelIn",P.models,aiModel(prov),()=>{})));}
+  fill();
   const btns=[];
-  if(apiKey())btns.push(button("Remove key",()=>{lsSet(API_KEY_STORE,"");closeModal();toast("API key removed from this browser.");if(after)after();}));
+  btns.push(button("Remove key",()=>{lsSet(AI_PROVIDERS[prov].keyStore,"");closeModal();toast(`${AI_PROVIDERS[prov].name} key removed from this browser.`);if(after)after();}));
   btns.push(button("Cancel",()=>{closeModal();if(after)after();}));
-  btns.push(button("Save",()=>{const v=key.value.trim();if(!v){key.focus();return;}lsSet(API_KEY_STORE,v);lsSet(API_MODEL_STORE,$("apiModelIn").value);closeModal();toast("API key saved in this browser.");if(after)after();},"primary"));
-  openModal("Claude API key",body,btns);setTimeout(()=>key.focus(),50);
+  btns.push(button("Save",()=>{const v=key.value.trim();if(!v){key.focus();return;}const P=AI_PROVIDERS[prov];
+    lsSet(P.keyStore,v);lsSet(P.modelStore,$("apiModelIn").value);lsSet(AI_PROVIDER_STORE,prov);closeModal();toast(`${P.name} key saved in this browser.`);if(after)after();},"primary"));
+  openModal("AI API key",body,btns);setTimeout(()=>key.focus(),50);
 }
 // Where saves go: inside claude.ai the artifact runtime's "downloads" capability; anywhere else
 // (the web build, the desktop app) a normal browser download.
@@ -1644,7 +1687,7 @@ let genCtl=null;let genSeed=Math.floor(Math.random()*9000)+1000;
 const IDEAS=["A flooded pump station with a sunken central chamber and catwalks around it","Small carnage arena: a ring corridor around a raised king-of-the-hill platform","Pfhor ship interior: long spine corridor, cargo bays off both sides, a bridge at the end","Lava refinery with a winding staircase climbing past dangerous pits","Jjaro ruin: symmetrical halls around a tall atrium, quiet and dimly lit"];
 function openGenerate(){
   const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="12px";
-  body.innerHTML=`<p class="note">Describe the level you want. Claude lays out rooms, heights, lighting, monsters and items, and the result lands on the map ready to edit. Rooms come out as rectangles; reshape them afterwards with the editing tools.</p>
+  body.innerHTML=`<p class="note">Describe the level you want. ${aiName()} lays out rooms, heights, lighting, monsters and items, and the result lands on the map ready to edit. Rooms come out as rectangles; reshape them afterwards with the editing tools.</p>
   <textarea id="genPrompt" placeholder="e.g. A three-floor reactor core with stairs spiralling up the outside walls"></textarea>
   <div class="chips" id="genIdeas"></div>
   <div class="row" style="gap:14px;align-items:center">
@@ -1654,12 +1697,12 @@ function openGenerate(){
   </div>
   <div class="genout" id="genOut" hidden></div>`;
   const ideas=body.querySelector("#genIdeas");IDEAS.forEach(t=>{const b=document.createElement("button");b.textContent=t.length>48?t.slice(0,46)+"…":t;b.title=t;b.onclick=()=>{body.querySelector("#genPrompt").value=t;};ideas.appendChild(b);});
-  const go=button("Generate with Claude",()=>runAI(go,stop),"primary");
+  const go=button(`Generate with ${aiName()}`,()=>runAI(go,stop),"primary");
   const stop=button("Stop",()=>{if(genCtl)genCtl.abort();});stop.hidden=true;
   const rnd=button(`Random layout`,()=>{const size=$("genSize").value,mode=$("genMode").value,add=$("genAdd").checked;const spec=randomSpec(genSeed++,size,mode);applySpec(spec,add,`Random layout #${genSeed-1}`);});
-  if(!getSampler()){go.disabled=true;go.title=inClaude()?"Claude isn't reachable from this view.":"Add your Anthropic API key first.";
-    if(!inClaude()){const o=body.querySelector("#genOut");o.hidden=false;o.textContent="Generate with Claude needs Claude: add your own Anthropic API key, or use the claude.ai version of Forge. Random layout works without either.";}}
-  const keyBtn=inClaude()?null:button(apiKey()?"API key ✓":"Add API key",()=>{const p=$("genPrompt").value;openApiKey(()=>{openGenerate();$("genPrompt").value=p;});});
+  if(!getSampler()){go.disabled=true;go.title=inClaude()?"Claude isn't reachable from this view.":"Add an API key first.";
+    if(!inClaude()){const o=body.querySelector("#genOut");o.hidden=false;o.textContent="AI generation needs an API key: add a free Gemini key or a Claude key with the API key button, or use the claude.ai version of Forge. Random layout works without either.";}}
+  const keyBtn=inClaude()?null:button(aiKey()?`${AI_PROVIDERS[aiProvider()].name} key ✓`:"Add API key",()=>{const p=$("genPrompt").value;openApiKey(()=>{openGenerate();$("genPrompt").value=p;});});
   if(keyBtn)keyBtn.id="genKey";
   openModal("Generate a level",body,[...(keyBtn?[keyBtn]:[]),rnd,stop,go]);
   setTimeout(()=>$("genPrompt")&&$("genPrompt").focus(),50);
@@ -1721,7 +1764,7 @@ async function runAI(go,stop){
     applySpec(spec,add,`“${spec.name||"Generated level"}”`);
   }catch(e){
     const code=e&&e.code;
-    const msg=code==="cancelled"?"Stopped.":code==="not_granted"?"Claude wasn't allowed to run. Allow it when asked to generate levels.":code==="rate_limited"?"Too many requests right now. Wait a moment and try again.":e instanceof SyntaxError?"Claude's answer wasn't valid level data. Try again or simplify the description.":(e&&e.message)||"Generation failed.";
+    const msg=code==="cancelled"?"Stopped.":code==="not_granted"?"Claude wasn't allowed to run. Allow it when asked to generate levels.":code==="rate_limited"?(e.message||"Too many requests right now. Wait a moment and try again."):e instanceof SyntaxError?`${aiName()}'s answer wasn't valid level data. Try again or simplify the description.`:(e&&e.message)||"Generation failed.";
     if($("genOut"))$("genOut").textContent=msg;
   }finally{genCtl=null;if(go.isConnected){go.disabled=false;stop.hidden=true;}}
 }
