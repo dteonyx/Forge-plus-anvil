@@ -96,10 +96,11 @@ test("Generate with Claude works with your own API key", async () => {
   });
 
   await page.evaluate(() => window.__forge.openGenerate());
-  assert.ok(await page.locator("#modal").getByRole("button", { name: "Generate with Claude" }).isDisabled(), "disabled until a key is added");
+  assert.ok(await page.locator("#modal").getByRole("button", { name: /^Generate with / }).isDisabled(), "disabled until a key is added");
 
   // a bad key gives a clear message
   await page.click("#genKey");
+  await page.selectOption("#apiProvider", "anthropic");
   await page.fill("#apiKeyIn", "bad");
   await page.locator("#modal").getByRole("button", { name: "Save", exact: true }).click();
   await page.fill("#genPrompt", "two small rooms");
@@ -120,5 +121,38 @@ test("Generate with Claude works with your own API key", async () => {
   assert.equal(seen.body.stream, true);
   const polys = await page.evaluate(() => window.__forge.doc.polys.length);
   assert.ok(polys >= 2);
-  await page.evaluate(() => localStorage.removeItem("forge-anthropic-key"));
+  await page.evaluate(() => localStorage.clear());
+});
+
+test("Generate with Gemini works with a Gemini API key", async () => {
+  const { page } = app;
+  const spec = { name: "Gemini Test", environment: "lava", landscape: "night", mode: "solo",
+    rooms: [{ id: "A", x: 0, y: 0, w: 4, h: 4, floor: 0, ceiling: 2, light: 80 }, { id: "B", x: 4, y: 1, w: 3, h: 2, floor: 0, ceiling: 2, light: 70 }],
+    objects: [{ kind: "player", room: "A", dx: 0.5, dy: 0.5, facing: 0 }] };
+  let seen = null;
+  await page.route(/generativelanguage\.googleapis\.com/, async (route) => {
+    const req = route.request();
+    seen = { url: req.url(), headers: req.headers(), body: JSON.parse(req.postData()) };
+    const json = JSON.stringify(spec), half = Math.floor(json.length / 2);
+    const ev = (parts) => `data: ${JSON.stringify({ candidates: [{ content: { role: "model", parts } }] })}\r\n\r\n`;
+    // a "thought" part (thinking models) must be ignored; the answer arrives in two chunks
+    const body = ev([{ text: "planning the rooms", thought: true }]) + ev([{ text: json.slice(0, half) }]) + ev([{ text: json.slice(half) }]);
+    await route.fulfill({ status: 200, contentType: "text/event-stream", body });
+  });
+  await page.evaluate(() => localStorage.clear());
+  await page.evaluate(() => window.__forge.openGenerate());
+  await page.click("#genKey");
+  assert.equal(await page.inputValue("#apiProvider"), "gemini", "Gemini (free tier) is the default for new users");
+  await page.fill("#apiKeyIn", "AIza-test");
+  await page.locator("#modal").getByRole("button", { name: "Save", exact: true }).click();
+  await page.fill("#genPrompt", "two rooms over lava");
+  await page.locator("#modal").getByRole("button", { name: "Generate with Gemini" }).click();
+  await page.waitForFunction(() => window.__forge.doc.info.name === "Gemini Test");
+
+  assert.match(seen.url, /\/v1beta\/models\/gemini-3\.8-flash:streamGenerateContent\?alt=sse$/);
+  assert.equal(seen.headers["x-goog-api-key"], "AIza-test");
+  assert.equal(seen.body.generationConfig.responseMimeType, "application/json");
+  assert.match(seen.body.contents[0].parts[0].text, /two rooms over lava/);
+  assert.ok(await page.evaluate(() => window.__forge.doc.polys.length) >= 2);
+  await page.evaluate(() => localStorage.clear());
 });
