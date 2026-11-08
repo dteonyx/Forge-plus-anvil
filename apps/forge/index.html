@@ -36,6 +36,39 @@ html:root[data-ui="retro"]{
   --font-display:"Pixelify Sans","Chicago","Geneva",monospace; --font-ui:"IBM Plex Mono",Monaco,"Courier New",monospace;
   --radius:0px; --shadow:2px 2px 0 #000; color-scheme:light;
 }
+/* Forge-style value palette (map views) */
+.vpal{position:absolute;right:10px;top:10px;width:178px;max-height:calc(100% - 20px);display:flex;flex-direction:column;gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:6px;box-shadow:var(--shadow);font-size:12px;z-index:2}
+.vpal .vhead{display:flex;align-items:center;gap:6px}.vpal .vhead b{flex:1;font-family:var(--font-display);font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+.vpal .vmin{border:0;background:transparent;cursor:pointer;padding:0 4px;font-size:12px}
+.vpal select{width:100%;padding:3px 4px;border:1px solid var(--line);background:var(--panel-2);border-radius:var(--radius)}
+.vlist{display:grid;grid-template-columns:repeat(3,1fr);gap:3px;overflow-y:auto;min-height:0}
+.vlist.wide{grid-template-columns:1fr}.vlist.two{grid-template-columns:repeat(2,1fr)}
+.canvasbox.haspal .hint{right:198px;max-width:min(340px,calc(100% - 218px))}
+@media (max-width:760px){.canvasbox.haspal .hint{display:none}}
+.vsw{display:flex;align-items:center;gap:4px;padding:2px 3px;border:1px solid var(--line);background:var(--panel-2);border-radius:3px;cursor:pointer;font-family:var(--font-mono);font-size:10px;text-align:left;min-width:0}
+.vsw i{flex:none;width:12px;height:12px;border:1px solid rgba(0,0,0,.35);border-radius:2px}
+.vsw span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vsw.unused{opacity:.55}.vsw:hover{border-color:var(--edge)}
+.vsw.on{outline:2px solid var(--accent);outline-offset:0;opacity:1;background:var(--panel)}
+.vpal .vbtns{display:flex;flex-wrap:wrap;gap:4px}.vpal .vbtns .btn{padding:3px 7px;font-size:11px}
+@media (max-width:760px){.vpal{width:150px}}
+/* light table, light editor, spawn table, dial */
+.ltable{display:flex;flex-direction:column;gap:4px;max-height:46vh;overflow-y:auto}
+.lrow{display:flex;align-items:center;gap:8px;padding:4px 6px;border:1px solid var(--line);border-radius:var(--radius);background:var(--panel-2)}
+.lrow.on{outline:2px solid var(--accent)}.lrow i{flex:none;width:18px;height:18px;border:1px solid var(--line);border-radius:3px}.lrow span{flex:1;font-size:12px}
+.lstates{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.lstates fieldset{border:1px solid var(--line);border-radius:var(--radius);padding:6px 8px;display:flex;flex-direction:column;gap:4px;min-width:0}
+.lstates legend{font-weight:600;font-size:12px;padding:0 4px}
+@media (max-width:760px){.lstates{grid-template-columns:1fr}}
+.spawnwrap{max-height:52vh;overflow:auto;border:1px solid var(--line);border-radius:var(--radius)}
+table.spawn{border-collapse:collapse;width:100%;font-size:12px}
+table.spawn th{position:sticky;top:0;background:var(--panel-2);text-align:left;font-weight:600;padding:5px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.spawn td{padding:3px 6px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.spawn td.num{text-align:center}
+table.spawn input[type=number]{width:56px;padding:2px 4px;border:1px solid var(--line);background:var(--panel);border-radius:3px;font-family:var(--font-mono)}
+table.spawn .inf{display:inline-flex;align-items:center;gap:4px}table.spawn .inf label{display:inline-flex;align-items:center;gap:2px}
+canvas.dial{width:42px;height:42px;cursor:grab;touch-action:none;flex:none}
+.paintopts{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px}.paintopts input[type=number]{width:56px}
 [hidden]{display:none!important}
 html,body{height:100%}
 body{background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:13px;margin:0;overflow:hidden}
@@ -266,6 +299,7 @@ html[data-ui="retro"] .issue i{border-radius:0}
     <div class="canvasbox" id="canvasbox">
       <canvas id="map" aria-label="Level map"></canvas>
       <div class="legend" id="legend" hidden></div>
+      <div class="vpal" id="vpal" hidden></div>
       <div class="hint" id="hint"></div>
     </div>
   </section>

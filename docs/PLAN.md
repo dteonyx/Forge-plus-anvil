@@ -63,7 +63,8 @@ Format facts confirmed while building are in "Format notes" below.
 - [x] Draw lines (snap to points/grid, auto-split crossed lines), room rectangle tool, fill polygon from a closed loop
 - [x] Move/merge points, move polygons and objects
 - [x] Edit polygons: floor/ceiling heights, type, light %, textures; multi-select
-- [x] View modes: Draw / Texture / Floor / Ceiling / Light / Type with legend and value labels
+- [x] View modes: Draw / Texture / Floor / Ceiling / Light / Type / Liquid with legend and value labels
+- [x] Forge-style palettes in the Floor, Ceiling, Light, Type and Liquid views: pick a value, click or drag over polygons to paint it, Alt-click picks a value up, double-click changes a value everywhere (from Bungie's tutorial movies, see `claude/FORGE_TUTORIAL_NOTES.md`)
 - [x] Undo/redo (150 steps), autosave in the browser
 - [x] Validation with click-to-locate and one-click fixes
 - [x] Real texture thumbnails and texture picker
@@ -72,12 +73,16 @@ Format facts confirmed while building are in "Format notes" below.
 - [x] Place monsters, items, scenery, player starts, goals, sounds; facing, height, monster flags
 - [x] Platforms (doors, lifts): presets, all 28 flags, auto/explicit limits computed like Aleph One, 3D start/open states
 - [x] Liquids: type, surface/tides, current; shared records like Bungie's
-- [~] Lights: imported light tables kept (switches, strobes, tides work); new surfaces use Forge's 21-step table. No light editor yet
+- [x] Lights: simple 0–100% levels (Forge's 21-step table) plus an editable light table: presets (steady, strobe, flicker, pulse, tide) and Forge's six-state editor. Painted with the Light palette (whole room, floor or ceiling); liquids' tides can follow a table light. Imported light records are read and written back exactly
+- [x] Item and monster spawning tables (Forge's Item/Monster Parameters): start with, min, max, total, chance, random spots
+- [x] Facing and liquid-current dials; door/lift speed in WU per second; control panel flags (needs light, destructible, shoot to toggle)
+- [x] Level tab says whether a map needs Infinity (Jjaro textures, KKV-7 SMG, Jjaro goo)
 - [ ] Landscape (sky) textures on walls/ceilings
 - [x] Level settings: name, game, environment, landscape, game types, environment flags, mission flags, Marathon 1 compatibility flags
 - [x] Terminals: script editor (#LOGON/#PICT/…; $B/$I/$U/$C codes) with live preview; reads and writes Bungie's format
 
 ### Phase 4 — 3D preview
+- [x] Paint mode: Apply texture / Apply light toggles with a light level, and G or Alt-click picks up both (Forge's option-click)
 - [x] Render the level in 3D with the real textures (numbered stand-ins when no Shapes file is loaded)
 - [x] Walk mode (steps, gravity, headroom, solid lines) and fly mode; touch d-pad
 - [x] Paint mode (visual mode): click to paint walls/floors/ceilings, Shift+click paints a whole room, eyedropper, J/L/I/K texture offsets, +/− light, undo

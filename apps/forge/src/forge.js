@@ -93,14 +93,14 @@ function deserialize(s){
   if(!GAMES[d.info.game])d.info.game="inf";
   d.pts = (o.pts||[]).map(([x,y])=>P(x,y));
   d.lines = (o.lines||[]).filter(l=>d.pts[l[0]]&&d.pts[l[1]]&&l[0]!==l[1]).map(([a,b,s])=>({a:d.pts[a],b:d.pts[b],solid:!!s}));
-  d.polys = (o.polys||[]).filter(q=>q.verts&&q.verts.length>=3&&q.verts.every(i=>d.pts[i])).map(q=>{const r={...polyDefaults(),...q,verts:q.verts.map(i=>d.pts[i])};for(const k of ["flight","clight","fli","cli"])if(r[k]==null)delete r[k];return r;});
+  d.polys = (o.polys||[]).filter(q=>q.verts&&q.verts.length>=3&&q.verts.every(i=>d.pts[i])).map(q=>{const r={...polyDefaults(),...q,verts:q.verts.map(i=>d.pts[i])};for(const k of ["flight","clight","fli","cli","wli"])if(r[k]==null)delete r[k];return r;});
   for(const [a,b,v] of (o.sides||[]))if(d.pts[a]&&d.pts[b])d.sides.set(d.pts[a].id+">"+d.pts[b].id,v);
   d.objs = (o.objs||[]).map(x=>({kind:3,sub:0,x:0,y:0,z:0,facing:0,flags:0,...x}));
   for(const k of ["placement","terms","notes","lights","ambi","bonk","physics"])if(o[k]!=null)d[k]=o[k];
   return d;
 }
 // Light indexes kept from an imported map stop applying once a surface's light is edited here.
-function clearPolyLightIdx(q){delete q.fli;delete q.cli;for(let k=0;k<q.verts.length;k++){const s=sideGet(q.verts[k],q.verts[(k+1)%q.verts.length]);if(s)for(const part of ["full","upper","lower","trans"])if(s[part]&&s[part].light==null)delete s[part].li;}}
+function clearPolyLightIdx(q){delete q.fli;delete q.cli;delete q.wli;for(let k=0;k<q.verts.length;k++){const s=sideGet(q.verts[k],q.verts[(k+1)%q.verts.length]);if(s)for(const part of ["full","upper","lower","trans"])if(s[part]&&s[part].light==null)delete s[part].li;}}
 // Polygon numbers stored in teleporters, platform triggers and platform switches follow polygons when others are deleted.
 let lastPolys=null;
 function remapPolyRefs(){
@@ -654,7 +654,7 @@ function buildMapChunks(d=doc){
     const def={b:p.wtex,ox:0,oy:0};const visible=!o||t!==0||o.floor>=p.ceil||o.ceil<=p.floor;
     const prim=!visible?null:t===0?(s.full||s.upper||s.lower||def):t===2?(s.lower||s.full||def):(s.upper||s.full||def);
     const sec=t===4?(s.lower||s.full||def):null;const tr=s.trans||null;
-    const lt=x=>x?lidx(x.light??p.light,x.li):lidx(p.light,p.fli);const pn=s.panel;
+    const lt=x=>x?lidx(x.light??p.light,x.li??(x.light==null?p.wli:undefined)):lidx(p.light,p.fli);const pn=s.panel;
     sides.push({t,poly:pi,line:lIdx.get(e.l),tex:prim?shape(prim.b,prim.col,prim.clut):0xffff,x:prim?prim.ox|0:0,y:prim?prim.oy|0:0,xf:prim?prim.xfer|0:0,
       tex2:sec?shape(sec.b,sec.col,sec.clut):0xffff,x2:sec?sec.ox|0:0,y2:sec?sec.oy|0:0,xf2:sec?sec.xfer|0:0,
       tex3:tr?shape(tr.b,tr.col,tr.clut):0xffff,x3:tr?tr.ox|0:0,y3:tr?tr.oy|0:0,xf3:tr?tr.xfer|0:0,
@@ -1075,7 +1075,8 @@ function polyFill(q,range){
   switch(opts.viewMode){
     case "floor":return heightColor(q.floor,...range);
     case "ceil":return heightColor(q.ceil,...range);
-    case "light":{const v=Math.round(25+q.light*2.1);return `rgb(${v},${v},${Math.min(255,v+8)})`;}
+    case "light":{const lv=polyLightValue(q,opts.lightTarget);const p=lv.t!=null?(opts.lightTarget==="ceil"?(q.clight??q.light):(q.flight??q.light)):lv.p;const v=Math.round(25+p*2.1);return `rgb(${v},${v},${Math.min(255,v+8)})`;}
+    case "liquid":return q.media?mediaColor(q.media):pal.poly;
     case "type":return TYPE_COLORS[q.type]||pal.poly;
     default:return pal.poly;}
 }
@@ -1125,7 +1126,7 @@ function draw(){
   if(view.scale*WU>14)for(const p of doc.pts){const [x,y]=toS(p.x,p.y);const s=selPts.has(p)||hover===p;ctx.fillStyle=s?pal.accent:pal.pt;const r=s?ps+2:ps;ctx.fillRect(x-r/2,y-r/2,r,r);}
   // values
   if(opts.showValues&&view.scale*WU>26){ctx.font=`500 ${Math.round(clamp(view.scale*WU/4,9,12))}px ${getComputedStyle(document.body).getPropertyValue("--font-mono")||"monospace"}`;ctx.textAlign="center";ctx.textBaseline="middle";
-    for(const q of doc.polys){let txt=null;if(opts.viewMode==="floor")txt=fmt(q.floor);else if(opts.viewMode==="ceil")txt=fmt(q.ceil);else if(opts.viewMode==="light")txt=q.light+"%";else if(opts.viewMode==="type"&&q.type)txt=TYPE_NAME[q.type];
+    for(const q of doc.polys){let txt=null;if(opts.viewMode==="floor")txt=fmt(q.floor);else if(opts.viewMode==="ceil")txt=fmt(q.ceil);else if(opts.viewMode==="light"){const lv=polyLightValue(q,opts.lightTarget);txt=lv.t!=null?"#"+lv.t:lv.p+"%";}else if(opts.viewMode==="type"&&q.type)txt=TYPE_NAME[q.type];else if(opts.viewMode==="liquid"&&q.media)txt=mediaLabel(q.media);
       if(!txt)continue;const c=centroid(q.verts);const [x,y]=toS(c.x,c.y);const tw=ctx.measureText(txt).width+8;const xs=q.verts.map(v=>v.x),ys=q.verts.map(v=>v.y);if((Math.max(...xs)-Math.min(...xs))*view.scale<tw+2||(Math.max(...ys)-Math.min(...ys))*view.scale<18)continue;
       ctx.fillStyle=pal.panel;ctx.globalAlpha=.85;ctx.fillRect(x-tw/2,y-8,tw,16);ctx.globalAlpha=1;ctx.fillStyle=pal.fg;ctx.fillText(txt,x,y+.5);}}
   // teleporter arrows
@@ -1199,6 +1200,11 @@ canvas.addEventListener("pointerdown",e=>{
   if(pointers.size===2){const [a,b]=[...pointers.values()];pinch={d:hyp(a.x,a.y,b.x,b.y),mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2},scale:view.scale,c:{x:view.cx,y:view.cy}};drag=null;return;}
   const sx=e.offsetX,sy=e.offsetY,w=toW(sx,sy);cursorW=w;
   if(e.button===1||e.button===2||tool==="pan"||spaceDown){drag={type:"pan",sx,sy,cx:view.cx,cy:view.cy};return;}
+  if(tool==="select"&&PALETTE_MODES.includes(opts.viewMode)&&(vpaint||e.altKey)){
+    const q=polyAtPoint(w);
+    if(e.altKey){if(q){armPaint(opts.viewMode,samplePoly(opts.viewMode,q));status("Picked up the polygon's value. Click or drag to paint it.");}return;}
+    pushUndo();const did=paintAt(w);drag={type:"paint",did};if(did){changed();}return;
+  }
   if(tool==="select"){
     const h=hitTest(sx,sy);
     if(!h){if(!e.shiftKey)setSel(null,[]);drag={type:"pan",sx,sy,cx:view.cx,cy:view.cy};return;}
@@ -1252,6 +1258,7 @@ canvas.addEventListener("pointermove",e=>{
       drag.movers.forEach((m,i)=>{m.x=Math.round(drag.orig[i].x+dx);m.y=Math.round(drag.orig[i].y+dy);});
       refreshInspectorValues();
     } else if(drag.type==="rect"){const t=snapPoint(w);drag.cur={x:t.x,y:t.y};}
+    else if(drag.type==="paint"){if(paintAt(w)){drag.did=true;issues=validate();renderVPal();}}
     else if(drag.type==="face"){const o=drag.obj;const d=hyp(o.x,o.y,w.x,w.y);if(d*view.scale>10){o.facing=Math.round(Math.atan2(w.y-o.y,w.x-o.x)*180/Math.PI/15)*15;o.facing=(o.facing+360)%360;refreshInspectorValues();}}
   } else if(tool==="select"&&!isTouch){const h=hitTest(sx,sy);const nh=h?h.item:null;if(nh!==hover){hover=nh;}}
   updateStatus();redraw();
@@ -1271,6 +1278,7 @@ function endPointer(e){
     if(q){if(!neighborPoly(q.verts)||true){} for(const p of [...doc.polys])if(p.verts.length>8)splitPolygon(p);setSel("poly",[q]);status(`Room added: ${((x1-x0)/WU).toFixed(2)} × ${((y1-y0)/WU).toFixed(2)} WU.`);}
     changed();
   } else if(d.type==="face"){changed();}
+  else if(d.type==="paint"){if(d.did)changed();else undoStack.pop();}
   redraw();
 }
 canvas.addEventListener("pointerup",endPointer);canvas.addEventListener("pointercancel",endPointer);
@@ -1299,10 +1307,11 @@ document.addEventListener("keydown",e=>{
   if(k===" "){spaceDown=true;canvas.style.cursor="grab";e.preventDefault();return;}
   const tmap={v:"select",l:"line",r:"rect",f:"fill",o:"object",n:"note",h:"pan"};
   if(tmap[k]){setTool(tmap[k]);return;}
+  if(k==="escape"&&vpaint){disarmPaint();return;}
   if(k==="escape"||k==="enter"){if(chain.length){chain=[];status("Line finished.");redraw();}else setSel(null,[]);return;}
   if(k==="delete"||k==="backspace"){e.preventDefault();deleteSelection(e.shiftKey);return;}
   if(k==="g"){opts.snap=!opts.snap;savePrefs();renderOptbar();status(opts.snap?"Snap to grid on.":"Snap to grid off.");redraw();return;}
-  if(["1","2","3","4","5","6"].includes(k)){setViewMode(["draw","tex","floor","ceil","light","type"][+k-1]);return;}
+  if(["1","2","3","4","5","6","7"].includes(k)){setViewMode(["draw","tex","floor","ceil","light","type","liquid"][+k-1]);return;}
   if(k==="0"){fitView();return;}
   if(k==="="||k==="+"){zoomBy(1.25);return;}if(k==="-"){zoomBy(0.8);return;}
   if(k==="tab"){e.preventDefault();open3D();return;}
@@ -1353,13 +1362,13 @@ const HINTS={
   object:"Click inside a polygon to place the object chosen above. Drag while placing to set its facing.",
   note:"Click to place the label or note chosen above; drag a note to move it. Extraction labels go inside ordinary walkable floor.",
   pan:"Drag to move around. Scroll or pinch to zoom."};
-function setTool(t){tool=t;chain=[];renderTools();renderOptbar();$("hint").textContent=HINTS[t];canvas.style.cursor=t==="pan"?"grab":t==="select"?"default":"crosshair";redraw();}
-function setViewMode(m){opts.viewMode=m;renderOptbar();renderLegend();redraw();}
+function setTool(t){tool=t;chain=[];renderTools();renderOptbar();$("hint").textContent=HINTS[t];if(t!=="select")vpaint=null;if(typeof renderVPal==="function"){renderVPal();updatePaintHint();}canvas.style.cursor=t==="pan"?"grab":t==="select"?"default":"crosshair";redraw();}
+function setViewMode(m){opts.viewMode=m;if(vpaint&&vpaint.mode!==m)vpaint=null;renderOptbar();renderLegend();renderVPal();updatePaintHint();redraw();}
 function sel_(id,options,value,onchange){const s=document.createElement("select");s.id=id;for(const [v,l] of options){const o=document.createElement("option");o.value=v;o.textContent=l;s.appendChild(o);}s.value=String(value);s.onchange=()=>onchange(s.value);return s;}
 function renderOptbar(){
   const el=$("optbar");el.innerHTML="";
   const vm=document.createElement("div");vm.className="viewmodes";vm.setAttribute("role","group");vm.setAttribute("aria-label","Map view");
-  for(const [m,l] of [["draw","Draw"],["tex","Texture"],["floor","Floor"],["ceil","Ceiling"],["light","Light"],["type","Type"]]){const b=document.createElement("button");b.textContent=l;b.title=`${l} view`;b.setAttribute("aria-pressed",opts.viewMode===m);b.onclick=()=>setViewMode(m);vm.appendChild(b);}
+  for(const [m,l] of [["draw","Draw"],["tex","Texture"],["floor","Floor"],["ceil","Ceiling"],["light","Light"],["type","Type"],["liquid","Liquid"]]){const b=document.createElement("button");b.textContent=l;b.title=`${l} view`;b.setAttribute("aria-pressed",opts.viewMode===m);b.onclick=()=>setViewMode(m);vm.appendChild(b);}
   el.appendChild(vm);
   const grid=document.createElement("label");grid.innerHTML='<span class="lbl">Grid</span>';grid.appendChild(sel_("optGrid",GRIDS,opts.grid,v=>{opts.grid=+v;savePrefs();redraw();}));el.appendChild(grid);
   const sn=document.createElement("label");sn.innerHTML=`<input type="checkbox" id="optSnap" ${opts.snap?"checked":""}> Snap`;sn.querySelector("input").onchange=e=>{opts.snap=e.target.checked;savePrefs();};el.appendChild(sn);
@@ -1410,7 +1419,7 @@ function changed(){
   // drop selection items that no longer exist
   if(sel.kind){const pool=sel.kind==="poly"?doc.polys:sel.kind==="line"?doc.lines:sel.kind==="point"?doc.pts:sel.kind==="note"?(doc.notes||[]):doc.objs;sel.items=sel.items.filter(x=>pool.includes(x));if(!sel.items.length)sel.kind=null;}
   remapPolyRefs();syncLevel();saveScenarioSoon();
-  renderPane();renderLegend();updateStatus();redraw();
+  renderPane();renderLegend();renderVPal();updateStatus();redraw();
   $("bUndo").disabled=!undoStack.length;$("bRedo").disabled=!redoStack.length;
 }
 function field(label,input,unit){const f=document.createElement("label");f.className="field";const s=document.createElement("span");s.textContent=label;f.appendChild(s);
@@ -1433,7 +1442,7 @@ function renderPane(){
     for(const [l,t] of [["Draw a room","rect"],["Draw lines","line"],["Place objects","object"]])g.appendChild(button(l,()=>setTool(t)));
     g.appendChild(button("Generate a level…",openGenerate,"primary"));
     p.appendChild(g);
-    const k=group("Shortcuts");const n2=document.createElement("p");n2.className="note";n2.innerHTML="V select · L lines · R room · F fill · O objects · N labels · H pan<br>1–6 view modes · G snap · 0 fit · Tab 3D view · P paint in 3D<br>Delete removes · Shift+Delete removes a room and its walls<br>Ctrl+Z undo · Ctrl+Shift+Z redo · Ctrl+A select all";k.appendChild(n2);p.appendChild(k);
+    const k=group("Shortcuts");const n2=document.createElement("p");n2.className="note";n2.innerHTML="V select · L lines · R room · F fill · O objects · N labels · H pan<br>1–7 view modes · G snap · 0 fit · Tab 3D view · P paint in 3D<br>Delete removes · Shift+Delete removes a room and its walls<br>Ctrl+Z undo · Ctrl+Shift+Z redo · Ctrl+A select all";k.appendChild(n2);p.appendChild(k);
     return;}
   const items=sel.items,one=items[0];
   if(sel.kind==="poly"){
@@ -1490,7 +1499,10 @@ function renderPane(){
     else if(one.kind===2)g.appendChild(field("Item",selectInput("oItem",ITEMS.map(([,n],i)=>[i,n]),one.sub,v=>items.forEach(o=>o.sub=+v))));
     else if(one.kind===3)g.appendChild(field("Team",numInput("oTeam",one.sub,"1",v=>{pushUndo();items.forEach(o=>o.sub=clamp(v|0,0,7));changed();})));
     else g.appendChild(field("Index",numInput("oIdx",one.sub,"1",v=>{pushUndo();items.forEach(o=>o.sub=v|0);changed();})));
-    g.appendChild(field("Facing",numInput("oFace",one.facing,"15",v=>{pushUndo();items.forEach(o=>o.facing=((Math.round(v)%360)+360)%360);changed();}),"°"));
+    {const fw=document.createElement("div");fw.className="unit";let undone=false;
+      const fn=numInput("oFace",one.facing,"15",v=>{pushUndo();items.forEach(o=>o.facing=((Math.round(v)%360)+360)%360);changed();});
+      const dl=dialInput("oDial",one.facing,(v,done)=>{if(!undone){pushUndo();undone=true;}items.forEach(o=>o.facing=v);fn.value=v;redraw();if(done){undone=false;changed();}});
+      fw.appendChild(dl.el);fw.appendChild(fn);const em=document.createElement("em");em.textContent="°";fw.appendChild(em);g.appendChild(field("Facing",fw));}
     g.appendChild(field("Height",numInput("oZ",(one.z/WU).toFixed(3),"0.125",v=>{pushUndo();items.forEach(o=>o.z=Math.round(v*WU));changed();}),"WU above floor"));
     g.appendChild(field("X",numInput("oX",(one.x/WU).toFixed(3),"0.125",v=>{pushUndo();one.x=Math.round(v*WU);changed();}),"WU"));
     g.appendChild(field("Y",numInput("oY",(one.y/WU).toFixed(3),"0.125",v=>{pushUndo();one.y=Math.round(v*WU);changed();}),"WU"));
@@ -1534,12 +1546,19 @@ function renderLevel(p){
   g.appendChild(field("Game",selectInput("lvGame",GAME_IDS.map(k=>[k,GAMES[k].name]),i.game,v=>{const was=i.game;i.game=v;if(v==="m1"&&was!=="m1")i.envFlags|=M1_FLAGS;if(v!=="m1"&&was==="m1")i.envFlags&=~M1_FLAGS;if(!envOptions(v).some(o=>o[0]===i.env))i.env=envOptions(v)[0][0];patternCache.clear();})));
   g.appendChild(field("Environment",selectInput("lvEnv",envOptions(i.game),i.env,v=>{i.env=+v;patternCache.clear();})));
   const gn=document.createElement("p");gn.className="note";gn.textContent=GAMES[i.game].note;g.appendChild(gn);
+  {const r=compatReasons();if(r){const cn=document.createElement("p");cn.className="note";cn.id="lvCompat";
+    cn.textContent=r.length?`This map needs Infinity: it uses ${r.join(", ")}.`+(i.game==="m2"?" Durandal can't play it.":""):"This map plays in both Durandal and Infinity.";
+    if(r.length&&i.game==="m2")cn.style.color="var(--warn)";g.appendChild(cn);}}
   g.appendChild(field("Landscape",selectInput("lvLand",LANDSCAPES.map((n,k)=>[k,n]),i.landscape,v=>i.landscape=+v)));
   p.appendChild(g);
   const g2=group("Game types");g2.appendChild(checks(GAME_TYPES,i.entry,v=>i.entry=v,"gt"));p.appendChild(g2);
   const g3=group("Environment");g3.appendChild(checks(ENV_FLAGS,i.envFlags,v=>i.envFlags=v,"ef"));p.appendChild(g3);
   if(i.game==="m1"){const g6=group("Marathon 1 compatibility");g6.appendChild(checks(M1_COMPAT,i.envFlags,v=>i.envFlags=v,"m1f"));const n6=document.createElement("p");n6.className="note";n6.textContent="These make Aleph One behave like the original Marathon for this level. Activation range and weapons are on by default.";g6.appendChild(n6);p.appendChild(g6);}
   const g4=group("Mission");g4.appendChild(checks(MISSIONS,i.mission,v=>i.mission=v,"ms"));p.appendChild(g4);
+  {const gs=group("Spawning and lights");const sn=document.createElement("p");sn.className="note";
+    const pl=doc.placement;const setUp=pl?[...pl.items,...pl.monsters].filter(r=>r.some((v,k)=>k!==1&&v)).length:0;const nL=(doc.lights||[]).length;
+    sn.textContent=`${setUp?setUp+" item or monster type"+(setUp>1?"s":"")+" set to respawn or appear at random.":"Items and monsters appear only where you place them."} ${nL?nL+" light"+(nL>1?"s":"")+" in the light table.":"Only simple light levels so far."}`;gs.appendChild(sn);
+    const r=document.createElement("div");r.className="row";r.appendChild(button("Item spawning…",()=>openSpawnTable("items")));r.appendChild(button("Monster spawning…",()=>openSpawnTable("monsters")));r.appendChild(button("Lights…",()=>openLightTable()));gs.appendChild(r);p.appendChild(gs);}
   extractionSection(p);
   levelExtras(p);
   const g5=group("About export");const n=document.createElement("p");n.className="note";
@@ -2028,7 +2047,7 @@ function openSurfaceDialog(s,onDone){
   const lt=numInput("sfLight",cur.light??q.light,"5",()=>{});lt.disabled=!useOwn.checked;useOwn.onchange=()=>{lt.disabled=!useOwn.checked;};
   const lw=document.createElement("div");lw.className="unit";lw.appendChild(useOwn);lw.appendChild(lt);const em=document.createElement("em");em.textContent=`% (room is ${q.light}%)`;lw.appendChild(em);
   body.appendChild(field("Own light",lw));
-  let pSel,pPerm,pOn,pRepair;
+  let pSel,pPerm,pOn,pRepair,pExtra=[];
   if(isWall){
     const g=group("Control panel");const list=panelList(doc.info.env);
     pSel=sel_("sfPanel",[["","None"],...list.map(p=>[String(p.type),p.label])],panel?String(panel.type):"",()=>renderPanel());
@@ -2037,8 +2056,9 @@ function openSurfaceDialog(s,onDone){
     function renderPanel(){extra.innerHTML="";const t=pSel.value;if(!t)return;const def=list.find(p=>String(p.type)===t);
       if(PANEL_PERM[def.key]){pPerm=numInput("sfPerm",panel&&panel.type===+t?panel.perm:0,"1",()=>{});extra.appendChild(field(PANEL_PERM[def.key],pPerm));}else pPerm=null;
       const ck=document.createElement("div");ck.className="checks";
-      ck.innerHTML=`<label><input type="checkbox" id="sfOn"> Starts on / active</label><label><input type="checkbox" id="sfRepair"> Repair switch (needed to finish level)</label>`;
+      ck.innerHTML=`<label><input type="checkbox" id="sfOn"> Starts on / active</label><label><input type="checkbox" id="sfRepair"> Repair switch (needed to finish level)</label><label><input type="checkbox" id="sfLit"> Only works when lit</label><label><input type="checkbox" id="sfBreak"> Can be destroyed</label><label><input type="checkbox" id="sfShoot"> Only toggled by shooting it</label>`;
       extra.appendChild(ck);pOn=ck.querySelector("#sfOn");pRepair=ck.querySelector("#sfRepair");pOn.checked=panel?!!(panel.flags&1):true;pRepair.checked=panel?!!(panel.flags&4):false;
+      pExtra=[[0x10,ck.querySelector("#sfLit")],[0x20,ck.querySelector("#sfBreak")],[0x40,ck.querySelector("#sfShoot")]];for(const [b,c] of pExtra)c.checked=panel?!!(panel.flags&b):false;
       const n=document.createElement("p");n.className="note";n.textContent=`Uses the ${def.label.toLowerCase()} texture (${def.tex}) unless you pick another.`;extra.appendChild(n);}
     renderPanel();body.appendChild(g);
   }
@@ -2053,7 +2073,7 @@ function openSurfaceDialog(s,onDone){
       const rec=sideGet(s.a,s.b)||{};
       if(pSel&&pSel.value){const def=panelList(doc.info.env).find(p=>String(p.type)===pSel.value);
         const wasNew=!rec.panel||rec.panel.type!==def.type;
-        rec.panel={type:def.type,perm:pPerm?(parseInt(pPerm.value)||0):0,flags:(pOn&&pOn.checked?1:0)|(pRepair&&pRepair.checked?4:0)};
+        rec.panel={type:def.type,perm:pPerm?(parseInt(pPerm.value)||0):0,flags:(pOn&&pOn.checked?1:0)|(pRepair&&pRepair.checked?4:0)|pExtra.reduce((f,[b,c])=>f|(c.checked?b:0),0)};
         if(wasNew&&tex===origTex)rec[s.part]={...(rec[s.part]||t),b:def.tex};
         doc.sides.set(sideKey(s.a,s.b),rec);}
       else if(rec.panel){delete rec.panel;doc.sides.set(sideKey(s.a,s.b),rec);}}
@@ -2063,7 +2083,7 @@ function openSurfaceDialog(s,onDone){
   }
   openModal("Surface settings",body,[button("Cancel",()=>{closeModal();onDone&&onDone();}),button("Apply",()=>commit(true),"primary")]);
 }
-let paintTex=5;let view3d=null;let paletteShown=true;
+let paintTex=5;let view3d=null;let paletteShown=true;let paintLight=100;const paintApply={tex:true,light:false};
 function open3D(){
   if(view3d)return;
   if(typeof THREE==="undefined"){toast("The 3D library didn't load. Check your connection and reload.");return;}
@@ -2077,7 +2097,8 @@ function open3D(){
     <div class="help" id="h3help"></div></div>
   <div class="crosshair" id="h3cross"></div>
   <div class="paintbar" id="h3bar">
-    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Space paints · Shift+Space paints the whole room · G grabs a texture · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span></div>
+    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Space paints · Shift+Space paints the whole room · G or Alt-click picks up texture and light · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
+      <span class="paintopts"><label><input type="checkbox" id="h3applyTex"> Apply texture</label><label><input type="checkbox" id="h3applyLight"> Apply light</label><label>Light <input type="number" id="h3light" min="0" max="100" step="5"> %</label></span></div>
     <div class="palette" id="h3pal"></div></div>
   <div class="pad" id="h3pad"><button data-a="paint" aria-label="Paint">Paint</button><button data-k="f" aria-label="Forward">▲</button><button data-a="edit" aria-label="Edit surface">Edit</button><button data-k="l" aria-label="Turn left">◀</button><button data-k="b" aria-label="Back">▼</button><button data-k="r" aria-label="Turn right">▶</button></div>`;
   document.body.appendChild(wrap);
@@ -2150,6 +2171,10 @@ function open3D(){
     for(const l of doc.lines)if(l.solid&&segIntersect({x:st.x,y:st.y},{x:nx,y:ny},l.a,l.b))return false;
     return true;}
   const pal=wrap.querySelector("#h3pal");
+  const texCk=wrap.querySelector("#h3applyTex"),lightCk=wrap.querySelector("#h3applyLight"),lightIn=wrap.querySelector("#h3light");
+  texCk.checked=paintApply.tex;lightCk.checked=paintApply.light;lightIn.value=paintLight;
+  // hand the keyboard back to the 3D view after each change, so Space paints again
+  texCk.onchange=()=>{paintApply.tex=texCk.checked;texCk.blur();};lightCk.onchange=()=>{paintApply.light=lightCk.checked;lightCk.blur();};lightIn.onchange=()=>{paintLight=clamp(Math.round(+lightIn.value||0),0,100);lightIn.value=paintLight;lightCk.checked=paintApply.light=true;lightIn.blur();};
   function renderPalette(){pal.innerHTML="";const n=texCount();paintTex=clamp(paintTex,0,n-1);for(let i=0;i<n;i++){const b=document.createElement("button");b.className="texbtn"+(i===paintTex?" on":"");b.title=`Texture ${i}`;b.appendChild(thumb(i,52));const s=document.createElement("span");s.textContent=i;b.appendChild(s);b.onclick=()=>{paintTex=i;renderPalette();};pal.appendChild(b);}
     const on=pal.querySelector(".on");if(on)on.scrollIntoView({block:"nearest",inline:"nearest"});}
   function texOfSurf(s){if(s.kind==="floor")return {b:s.poly.ftex,ox:s.poly.fox,oy:s.poly.foy,light:s.poly.flight};if(s.kind==="ceil")return {b:s.poly.ctex,ox:s.poly.cox,oy:s.poly.coy,light:s.poly.clight};if(s.part==="trans")return (sideGet(s.a,s.b)||{}).trans||{b:0};return wallTex(s.poly,s.a,s.b,s.part);}
@@ -2160,11 +2185,19 @@ function open3D(){
   function applyTex(s,b){if(s.kind==="floor"){s.poly.ftex=b;delete s.poly.fcol;delete s.poly.fclut;}else if(s.kind==="ceil"){s.poly.ctex=b;delete s.poly.ccol;delete s.poly.cclut;}
     else{const cur=(sideGet(s.a,s.b)||{})[s.part];const t={...(cur||{ox:0,oy:0}),b};delete t.col;delete t.clut;sideSet(s.a,s.b,s.part,t);}}
   function refresh(){dirty=true;PInow=platformInfo(doc);build();updateAim();lastAim=undefined;}
-  function paint(all){if(!aim)return;pushUndo();const s=aim;
-    if(all){const q=s.poly;if(s.kind==="wall"){q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];for(const part of ["full","upper","lower"]){const cur=(sideGet(a,b)||{})[part];sideSet(a,b,part,{...(cur||{ox:0,oy:0}),b:paintTex});}});q.wtex=paintTex;}else applyTex(s,paintTex);}
-    else applyTex(s,paintTex);
+  function applyLight(s,v){const q=s.poly;
+    if(s.kind==="floor"){if(v===q.light&&q.clight==null&&q.fli==null)delete q.flight;else q.flight=v;delete q.fli;}
+    else if(s.kind==="ceil"){if(v===q.light&&q.flight==null&&q.cli==null)delete q.clight;else q.clight=v;delete q.cli;}
+    else{const t={...texOfSurf(s)};delete t.li;if(v===q.light&&q.wli==null&&q.fli==null)delete t.light;else t.light=v;sideSet(s.a,s.b,s.part,t);}}
+  function paint(all){if(!aim)return;if(!paintApply.tex&&!paintApply.light){status("Tick Apply texture or Apply light first.");return;}pushUndo();const s=aim;
+    if(paintApply.tex){
+      if(all){const q=s.poly;if(s.kind==="wall"){q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];for(const part of ["full","upper","lower"]){const cur=(sideGet(a,b)||{})[part];sideSet(a,b,part,{...(cur||{ox:0,oy:0}),b:paintTex});}});q.wtex=paintTex;}else applyTex(s,paintTex);}
+      else applyTex(s,paintTex);}
+    if(paintApply.light){if(all){const q=s.poly;q.light=paintLight;delete q.flight;delete q.clight;clearPolyLightIdx(q);
+        q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];const sd=sideGet(a,b);if(sd)for(const part of ["full","upper","lower","trans"])if(sd[part]){delete sd[part].light;delete sd[part].li;}});}
+      else applyLight(s,paintLight);}
     refresh();}
-  function grab(){if(!aim)return;paintTex=texOfSurf(aim).b;renderPalette();status(`Picked up texture ${paintTex}.`);}
+  function grab(){if(!aim)return;const t=texOfSurf(aim);paintTex=t.b;paintLight=t.light??aim.poly.light;renderPalette();lightIn.value=paintLight;status(`Picked up texture ${paintTex} and light ${paintLight}%.`);}
   function nudge(dx,dy){if(!aim)return;const s=aim;pushUndo();
     if(s.kind==="floor"){s.poly.fox=(s.poly.fox||0)+dx;s.poly.foy=(s.poly.foy||0)+dy;}
     else if(s.kind==="ceil"){s.poly.cox=(s.poly.cox||0)+dx;s.poly.coy=(s.poly.coy||0)+dy;}
@@ -2180,7 +2213,7 @@ function open3D(){
   const shBtn=wrap.querySelector("#h3shapes");shBtn.hidden=realTextures();shBtn.onclick=()=>{try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}openShapesDialog(false);};
   const onShapes=()=>{mats.forEach(m=>{m.map.dispose();m.dispose();});mats.clear();build();shBtn.hidden=realTextures();if(paletteShown)renderPalette();};
   window.addEventListener("forge-shapes",onShapes);
-  const onKey=e=>{if(!$("modal").hidden)return;const k=e.key.toLowerCase();
+  const onKey=e=>{if(!$("modal").hidden)return;if(e.target&&e.target.tagName==="INPUT"&&e.key!=="Escape")return;const k=e.key.toLowerCase();
     if((e.ctrlKey||e.metaKey)&&k==="z"){e.preventDefault();e.shiftKey?redo():undo();refresh();return;}
     if(k==="escape"){if(document.pointerLockElement)return;close();return;}
     if(k===" "){e.preventDefault();if(!e.repeat)paint(e.shiftKey);return;}
@@ -2202,6 +2235,7 @@ function open3D(){
   cv.addEventListener("pointerdown",e=>{
     const locked=document.pointerLockElement===cv;
     if(e.button===2){updateAim();editSurface();return;}
+    if(e.button===0&&e.altKey){updateAim();grab();return;}
     if(locked){if(e.button===0)paint(e.shiftKey);return;}
     look={x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,touch:e.pointerType!=="mouse"};cv.setPointerCapture(e.pointerId);});
   cv.addEventListener("pointermove",e=>{
@@ -2346,7 +2380,9 @@ function platformSection(items,one,p){
   const setP=(key,val)=>{pushUndo();all(q=>{q.plat={...PLAT_DEFAULT(),...(q.plat||{}),[key]:val};});changed();};
   g.appendChild(field("Sound set",sel_("plType",PLAT_TYPES,pf.type,v=>setP("type",+v))));
   const sp=PLAT_SPEEDS.find(s=>s[0]===pf.speed)?PLAT_SPEEDS:[...PLAT_SPEEDS,[pf.speed,`Custom (${pf.speed})`]];
-  g.appendChild(field("Speed",sel_("plSpeed",sp,pf.speed,v=>setP("speed",+v))));
+  {const sw=document.createElement("div");sw.className="unit";sw.appendChild(sel_("plSpeed",sp,pf.speed,v=>setP("speed",+v)));
+    const wn=numInput("plSpeedWU",(pf.speed*30/WU).toFixed(2),"0.25",v=>{if(isFinite(v)&&v>0)setP("speed",clamp(Math.round(v*WU/30),1,32767));});wn.style.width="64px";wn.title="World units per second";
+    sw.appendChild(wn);const em=document.createElement("em");em.textContent="WU/s";sw.appendChild(em);g.appendChild(field("Speed",sw));}
   g.appendChild(field("Waits",numInput("plDelay",(pf.delay/30).toFixed(1),"0.5",v=>{if(isFinite(v))setP("delay",Math.round(v*30));}),"seconds"));
   const PI=platformInfo(doc).get(one);
   for(const [key,lab] of [["min","Lowest"],["max","Highest"]]){const wrap=document.createElement("div");wrap.className="unit";
@@ -2375,7 +2411,14 @@ function liquidSection(items,one,p){
     if(tide)g.appendChild(field("Low tide",wuInput("lqLow",()=>m.low,v=>all(q=>{if(q.media)q.media={...q.media,low:v};})),"WU"));
     const tl=document.createElement("label");tl.className="checks";const ti=document.createElement("input");ti.type="checkbox";ti.id="lqTide";ti.checked=tide;
     ti.onchange=()=>{pushUndo();all(q=>{if(!q.media)return;q.media={...q.media,low:ti.checked?q.media.high-WU/2:q.media.high};});changed();};tl.appendChild(ti);tl.append(" Rises and falls (tide follows a light)");g.appendChild(tl);
-    g.appendChild(field("Current toward",numInput("lqDir",m.dir||0,"15",v=>{pushUndo();all(q=>{if(q.media)q.media={...q.media,dir:((Math.round(v)%360)+360)%360};});changed();}),"°"));
+    {const fw=document.createElement("div");fw.className="unit";let undone=false;
+      const setDir=v=>all(q=>{if(q.media)q.media={...q.media,dir:((Math.round(v)%360)+360)%360};});
+      const fn=numInput("lqDir",m.dir||0,"15",v=>{pushUndo();setDir(v);changed();});
+      const dl=dialInput("lqDial",m.dir||0,(v,done)=>{if(!undone){pushUndo();undone=true;}setDir(v);fn.value=v;if(done){undone=false;changed();}});
+      fw.appendChild(dl.el);fw.appendChild(fn);const em=document.createElement("em");em.textContent="°";fw.appendChild(em);g.appendChild(field("Current toward",fw));}
+    if(tide){const Ls=tableLights();const cur=m.li!=null&&m.li<Ls.length?String(m.li):"";
+      const ls=sel_("lqLight",[["","Room light (no tide)"],...Ls.map((L,i)=>[String(i),`#${i} ${lightSummary(L)}`])],cur,v=>{pushUndo();all(q=>{if(!q.media)return;const n={...q.media};if(v==="")delete n.li;else n.li=+v;q.media=n;});changed();});
+      ls.style.minWidth="0";ls.style.flex="1";const lw=document.createElement("div");lw.className="unit";lw.appendChild(ls);lw.appendChild(button("Lights…",()=>openLightTable()));g.appendChild(field("Tide follows",lw));}
     g.appendChild(field("Current speed",numInput("lqSpd",m.speed||0,"1",v=>{pushUndo();all(q=>{if(q.media)q.media={...q.media,speed:clamp(v|0,0,512)};});changed();}),"units"));
     const n=document.createElement("p");n.className="note";n.textContent=m.high<=one.floor?"The surface is below the floor, so the liquid won't show.":`Liquid is ${fmt(m.high-one.floor)} WU deep here.`;g.appendChild(n);
   }
@@ -2565,6 +2608,262 @@ function openWholeMap(wad,lv,fname){
   if(notes.size)toast([...notes].join("; "));
 }
 
+// =============================================================== Forge-style palettes, light table, spawn table
+// Forge's main trick: each map view (heights, lights, types, liquids) has a palette of the values on the level.
+// Pick a value, then click or drag over polygons to paint it. Alt-click a polygon picks up its value.
+// Double-click a value to change it everywhere it's used.
+
+// ---- light table (Aleph One static_light_data, 100 bytes) ----
+const LIGHT_FUNCS=[[0,"Constant"],[1,"Linear"],[2,"Smooth"],[3,"Flicker"]];
+const LIGHT_STATES=[["pa","Primary active"],["sa","Secondary active"],["ba","Becoming active"],["pi","Primary inactive"],["si","Secondary inactive"],["bi","Becoming inactive"]];
+const LIGHT_KINDS=[[0,"Normal"],[1,"Strobe"],[2,"Liquid tide"]];
+const LIGHT_FLAGS=[[1,"Starts on"],[2,"Slaved intensities"],[4,"Stateless (cycles through every state)"]];
+function decodeLight(b64){const u=b64dec(b64);const v=new DataView(u.buffer,u.byteOffset,u.byteLength);
+  const L={type:v.getInt16(0),flags:v.getUint16(2),phase:v.getInt16(4),tag:v.getInt16(90),rest:Array.from(u.subarray(92,100))};
+  LIGHT_STATES.forEach(([k],i)=>{const o=6+i*14;L[k]={fn:v.getInt16(o),period:v.getInt16(o+2),dperiod:v.getInt16(o+4),i:v.getInt32(o+6)/65536,di:v.getInt32(o+10)/65536};});return L;}
+function encodeLight(L){const w=new BW();w.i16(L.type);w.i16(L.flags);w.i16(L.phase);
+  for(const [k] of LIGHT_STATES){const s=L[k];w.i16(s.fn);w.i16(s.period);w.i16(s.dperiod);w.fixed(s.i);w.fixed(s.di);}
+  w.i16(L.tag);w.bytes(new Uint8Array(L.rest||[0,0,0,0,0,0,0,0]));return b64enc(w.out());}
+const fnSpec=(fn,period,i,dperiod=0,di=0)=>({fn,period,dperiod,i,di});
+const LIGHT_PRESETS={
+  steady:{label:"Steady (switchable)",make:I=>({type:0,flags:1|2,phase:0,tag:0,pa:fnSpec(0,30,I),sa:fnSpec(0,30,I),ba:fnSpec(2,30,I),pi:fnSpec(0,30,0),si:fnSpec(0,30,0),bi:fnSpec(2,30,0)})},
+  strobe:{label:"Strobe",make:I=>({type:1,flags:1|2,phase:0,tag:0,pa:fnSpec(0,4,I),sa:fnSpec(0,4,0),ba:fnSpec(0,4,I),pi:fnSpec(0,30,0),si:fnSpec(0,30,0),bi:fnSpec(0,4,0)})},
+  flicker:{label:"Flicker",make:I=>({type:0,flags:1|2,phase:0,tag:0,pa:fnSpec(3,30,I,15,0),sa:fnSpec(3,30,I*0.6,15,0.1),ba:fnSpec(2,30,I),pi:fnSpec(0,30,0),si:fnSpec(0,30,0),bi:fnSpec(2,30,0)})},
+  pulse:{label:"Slow pulse",make:I=>({type:0,flags:1|2,phase:0,tag:0,pa:fnSpec(2,60,I),sa:fnSpec(2,60,I*0.3),ba:fnSpec(2,30,I),pi:fnSpec(0,30,0),si:fnSpec(0,30,0),bi:fnSpec(2,30,0)})},
+  tide:{label:"Liquid tide (slow rise and fall)",make:I=>({type:2,flags:1|2,phase:0,tag:0,pa:fnSpec(2,300,I),sa:fnSpec(2,300,0),ba:fnSpec(2,30,I),pi:fnSpec(0,30,0),si:fnSpec(0,30,0),bi:fnSpec(2,30,0)})}};
+const tableLights=()=>(doc.lights||[]).map(decodeLight);
+const lightPct=L=>Math.round(clamp(L.pa.i,0,1)*100);
+function lightSummary(L){const f=s=>LIGHT_FUNCS.find(x=>x[0]===s.fn)?.[1]||"?";
+  const a=L.pa,b=L.sa;const kind=(a.fn===b.fn&&a.i===b.i)?`${f(a)} ${Math.round(a.i*100)}%`:`${f(a)} ${Math.round(a.i*100)}% ↔ ${Math.round(b.i*100)}%`;
+  return `${kind}${L.flags&1?"":" · starts off"}${L.tag?" · tag "+L.tag:""}`;}
+function addTableLight(L){if(!doc.lights)doc.lights=[];doc.lights.push(encodeLight(L));return doc.lights.length-1;}
+
+function openLightTable(focusIdx){
+  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="10px";
+  const n=document.createElement("p");n.className="note";
+  n.textContent="Simple light levels (0–100%) need no setup. Add a light here when you want one that flickers, strobes, pulses, follows a switch or drives a liquid's tide. Paint it on with the Light view's palette (or type its number into a light switch or liquid).";body.appendChild(n);
+  const list=document.createElement("div");list.className="ltable";body.appendChild(list);
+  const Ls=tableLights();
+  if(!Ls.length){const e=document.createElement("p");e.className="note";e.textContent="No lights in the table yet.";list.appendChild(e);}
+  const used=lightUse();
+  Ls.forEach((L,i)=>{const r=document.createElement("div");r.className="lrow"+(i===focusIdx?" on":"");
+    const sw=document.createElement("i");const v=Math.round(25+lightPct(L)*2.1);sw.style.background=`rgb(${v},${v},${v})`;r.appendChild(sw);
+    const t=document.createElement("span");t.innerHTML=`<b>#${i}</b> `;t.append(lightSummary(L)+(used[i]?` · used ${used[i]}×`:" · unused"));r.appendChild(t);
+    r.appendChild(button("Edit…",()=>openLightEditor(i)));list.appendChild(r);});
+  const add=document.createElement("div");add.className="row";
+  const ps=sel_("ltPreset",Object.entries(LIGHT_PRESETS).map(([k,v])=>[k,v.label]),"steady",()=>{});
+  const iv=numInput("ltI",100,"5",()=>{});iv.style.width="64px";
+  add.appendChild(field("Kind",ps));add.appendChild(field("Brightness",iv,"%"));
+  add.appendChild(button("Add light",()=>{pushUndo();const i=addTableLight(LIGHT_PRESETS[ps.value].make(clamp(+iv.value||0,0,100)/100));changed();openLightTable(i);status(`Added light #${i}. Pick it in the Light view's palette to paint it on.`);},"primary"));
+  body.appendChild(add);
+  openModal("Lights",body,[button("Done",()=>{closeModal();renderVPal();})]);
+}
+// how many surfaces use each table light
+function lightUse(){const u={};const inc=i=>{if(i!=null&&i>=0)u[i]=(u[i]||0)+1;};
+  for(const q of doc.polys){inc(q.fli);if(q.cli!==q.fli)inc(q.cli);if(q.media)inc(q.media.li);}
+  for(const s of doc.sides.values())for(const p of ["full","upper","lower","trans"])if(s[p])inc(s[p].li);return u;}
+function openLightEditor(idx){
+  const L=decodeLight(doc.lights[idx]);
+  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="10px";
+  const top=document.createElement("div");top.className="row";
+  const pre=sel_("leP",[["","Preset…"],...Object.entries(LIGHT_PRESETS).map(([k,v])=>[k,v.label])],"",v=>{if(!v)return;const nl=LIGHT_PRESETS[v].make(clamp(L.pa.i||1,0,1));Object.assign(L,nl);fill();});
+  top.appendChild(field("Start from",pre));
+  const kind=sel_("leKind",LIGHT_KINDS,L.type,v=>L.type=+v);top.appendChild(field("Kind",kind));
+  const ph=numInput("lePhase",L.phase,"1",v=>L.phase=v|0);ph.style.width="70px";top.appendChild(field("Phase",ph,"ticks"));
+  const tg=numInput("leTag",L.tag,"1",v=>L.tag=v|0);tg.style.width="60px";top.appendChild(field("Tag",tg));
+  body.appendChild(top);
+  const fl=document.createElement("div");fl.className="checks";body.appendChild(fl);
+  const grid=document.createElement("div");grid.className="lstates";body.appendChild(grid);
+  const hint=document.createElement("p");hint.className="note";hint.textContent="Periods are in ticks (30 ticks = 1 second). A light that's on swaps between its primary and secondary active states; switching it off runs “becoming inactive”, then the inactive pair. Δ adds a random amount each time.";body.appendChild(hint);
+  function fill(){
+    kind.value=String(L.type);ph.value=L.phase;tg.value=L.tag;
+    fl.innerHTML="";for(const [bit,lab] of LIGHT_FLAGS){const l=document.createElement("label");const c=document.createElement("input");c.type="checkbox";c.id="leF"+bit;c.checked=!!(L.flags&bit);c.onchange=()=>{L.flags=c.checked?L.flags|bit:L.flags&~bit;};l.appendChild(c);l.append(" "+lab);fl.appendChild(l);}
+    grid.innerHTML="";
+    for(const [k,lab] of LIGHT_STATES){const s=L[k];const g=document.createElement("fieldset");const lg=document.createElement("legend");lg.textContent=lab;g.appendChild(lg);
+      g.appendChild(field("Function",sel_("le"+k+"fn",LIGHT_FUNCS,s.fn,v=>s.fn=+v)));
+      const per=numInput("le"+k+"p",s.period,"1",v=>s.period=clamp(v|0,0,32767));const dper=numInput("le"+k+"dp",s.dperiod,"1",v=>s.dperiod=clamp(v|0,0,32767));
+      const it=numInput("le"+k+"i",Math.round(s.i*100),"5",v=>s.i=clamp(v,0,100)/100);const dit=numInput("le"+k+"di",Math.round(s.di*100),"5",v=>s.di=clamp(v,0,100)/100);
+      g.appendChild(field("Period",per,"ticks"));g.appendChild(field("Δ period",dper,"ticks"));g.appendChild(field("Brightness",it,"%"));g.appendChild(field("Δ brightness",dit,"%"));
+      grid.appendChild(g);}}
+  fill();
+  openModal(`Light #${idx}`,body,[button("Back",()=>openLightTable(idx)),button("Save",()=>{
+    // number inputs commit on change; read them again in case one still has focus
+    for(const [k] of LIGHT_STATES){const s=L[k];const g=id=>$(id);s.fn=+g("le"+k+"fn").value;s.period=clamp(parseInt(g("le"+k+"p").value)||0,0,32767);s.dperiod=clamp(parseInt(g("le"+k+"dp").value)||0,0,32767);s.i=clamp(parseFloat(g("le"+k+"i").value)||0,0,100)/100;s.di=clamp(parseFloat(g("le"+k+"di").value)||0,0,100)/100;}
+    L.phase=parseInt(ph.value)||0;L.tag=parseInt(tg.value)||0;L.type=+kind.value;
+    pushUndo();doc.lights[idx]=encodeLight(L);
+    // keep the editor's preview brightness in step with the light's "on" brightness
+    const pct=lightPct(L);for(const q of doc.polys){if(q.fli===idx&&q.cli===idx)q.light=pct;else{if(q.fli===idx)q.flight=pct;if(q.cli===idx)q.clight=pct;}}
+    changed();openLightTable(idx);status(`Light #${idx} saved.`);},"primary")],{wide:true});
+}
+
+// ---- view palettes ----
+let vpaint=null; // the armed palette value: {mode, value}
+opts.lightTarget=opts.lightTarget||"room";
+const PALETTE_MODES=["floor","ceil","light","type","liquid"];
+const mediaKeyOf=m=>m?JSON.stringify([m.type,m.low,m.high,m.dir|0,m.speed|0,m.flags|0,m.li??null]):"none";
+const MEDIA_NAME=Object.fromEntries(MEDIA_TYPES);
+function mediaLabel(m){if(!m)return "No liquid";const t=m.low!==m.high?` ${fmt(m.low)}–${fmt(m.high)}`:` ${fmt(m.high)}`;return `${MEDIA_NAME[m.type]||"Liquid"}${t}${m.speed?" · current":""}`;}
+function mediaColor(m){if(!m)return pal.poly;const c=MEDIA_TINT[m.type]||[1,1,1];return `rgb(${c.map(v=>Math.round(v*190)).join(",")})`;}
+function polyLightValue(q,target){ // what the light palette shows for a polygon
+  const nT=(doc.lights||[]).length;
+  const f=q.fli!=null&&q.fli<nT&&q.flight==null?{t:q.fli}:{p:q.flight??q.light},c=q.cli!=null&&q.cli<nT&&q.clight==null?{t:q.cli}:{p:q.clight??q.light};
+  return target==="ceil"?c:f;}
+const lightKey=v=>v.t!=null?"t"+v.t:"p"+v.p;
+function paletteEntries(mode){
+  const out=[];
+  if(mode==="floor"||mode==="ceil"){const key=mode;const vals=new Set(doc.polys.map(q=>q[key]));for(const h of (opts.extraHeights||[]))vals.add(h);
+    const sorted=[...vals].sort((a,b)=>a-b);const lo=sorted[0]??0,hi=sorted[sorted.length-1]??WU;
+    for(const v of sorted)out.push({value:v,key:String(v),label:fmt(v),color:heightColor(v,lo,hi),count:doc.polys.filter(q=>q[key]===v).length});}
+  else if(mode==="light"){
+    const counts={};for(const q of doc.polys){const k=lightKey(polyLightValue(q,opts.lightTarget));counts[k]=(counts[k]||0)+1;}
+    for(let p=100;p>=0;p-=5){const v=Math.round(25+p*2.1);out.push({value:{p},key:"p"+p,label:p+"%",color:`rgb(${v},${v},${Math.min(255,v+8)})`,count:counts["p"+p]||0});}
+    // odd percentages from older levels
+    for(const q of doc.polys){const lv=polyLightValue(q,opts.lightTarget);if(lv.p!=null&&lv.p%5&&!out.some(e=>e.key==="p"+lv.p)){const v=Math.round(25+lv.p*2.1);out.push({value:{p:lv.p},key:"p"+lv.p,label:lv.p+"%",color:`rgb(${v},${v},${v})`,count:counts["p"+lv.p]||0});}}
+    tableLights().forEach((L,i)=>{const v=Math.round(25+lightPct(L)*2.1);out.push({value:{t:i},key:"t"+i,label:"#"+i,color:`rgb(${v},${v},${Math.min(255,v+8)})`,count:counts["t"+i]||0,title:lightSummary(L),table:true});});}
+  else if(mode==="type"){for(const [t,name] of POLY_TYPES)out.push({value:t,key:String(t),label:name,color:TYPE_COLORS[t]||pal.poly,count:doc.polys.filter(q=>q.type===t).length,wide:true});}
+  else if(mode==="liquid"){out.push({value:null,key:"none",label:"No liquid",color:pal.poly,count:doc.polys.filter(q=>!q.media).length,wide:true});
+    const seen=new Map();for(const q of doc.polys)if(q.media){const k=mediaKeyOf(q.media);if(!seen.has(k))seen.set(k,{m:q.media,n:0});seen.get(k).n++;}
+    for(const m of (opts.extraMedia||[])){const k=mediaKeyOf(m);if(!seen.has(k))seen.set(k,{m,n:0});}
+    for(const [k,{m,n}] of seen)out.push({value:m,key:k,label:mediaLabel(m),color:mediaColor(m),count:n,wide:true});}
+  return out;}
+function samplePoly(mode,q){
+  if(mode==="floor")return q.floor;if(mode==="ceil")return q.ceil;if(mode==="type")return q.type;if(mode==="liquid")return q.media?{...q.media}:null;
+  if(mode==="light")return polyLightValue(q,opts.lightTarget);}
+function vpaintKey(mode,v){return mode==="light"?lightKey(v):mode==="liquid"?mediaKeyOf(v):String(v);}
+function applyPaint(q,mode,v){
+  if(mode==="floor")q.floor=v;else if(mode==="ceil")q.ceil=v;
+  else if(mode==="type"){q.type=v;if(v===5&&!q.plat)q.plat=PLAT_DEFAULT();}
+  else if(mode==="liquid"){if(v)q.media={...v};else delete q.media;}
+  else if(mode==="light"){const t=opts.lightTarget;
+    const pct=v.t!=null?lightPct(decodeLight(doc.lights[v.t])):v.p;
+    if(t==="room"){if(v.t!=null){q.fli=q.cli=q.wli=v.t;q.light=pct;delete q.flight;delete q.clight;
+        for(let k=0;k<q.verts.length;k++){const s=sideGet(q.verts[k],q.verts[(k+1)%q.verts.length]);if(s)for(const p of ["full","upper","lower","trans"])if(s[p]&&s[p].light==null)delete s[p].li;}}
+      else{q.light=pct;delete q.flight;delete q.clight;clearPolyLightIdx(q);}}
+    else if(t==="floor"){if(v.t!=null)q.fli=v.t;else delete q.fli;q.flight=pct;if(v.t!=null&&pct===q.light&&q.fli===q.cli)delete q.flight;}
+    else{if(v.t!=null)q.cli=v.t;else delete q.cli;q.clight=pct;}}}
+function paintAt(w){const q=polyAtPoint(w);if(!q||!vpaint)return false;
+  if(vpaintKey(vpaint.mode,samplePoly(vpaint.mode,q))===vpaintKey(vpaint.mode,vpaint.value))return false;applyPaint(q,vpaint.mode,vpaint.value);return true;}
+function armPaint(mode,value){vpaint={mode,value};renderVPal();updatePaintHint();canvas.style.cursor="cell";}
+function disarmPaint(){if(!vpaint)return;vpaint=null;renderVPal();updatePaintHint();canvas.style.cursor=tool==="select"?"default":"crosshair";}
+function updatePaintHint(){const h=$("hint");if(!h)return;
+  if(vpaint){const e=paletteEntries(vpaint.mode).find(x=>x.key===vpaintKey(vpaint.mode,vpaint.value));h.textContent=`Painting ${({floor:"floor height",ceil:"ceiling height",light:"light",type:"type",liquid:"liquid"})[vpaint.mode]} ${e?e.label:""}: click or drag over polygons. Alt-click picks up a polygon's value. Esc stops.`;}
+  else h.textContent=PALETTE_MODES.includes(opts.viewMode)&&tool==="select"?"Pick a value in the palette, then click or drag over polygons to paint it. Alt-click a polygon picks up its value. Double-click a value to change it everywhere.":HINTS[tool];}
+function renderVPal(){
+  const el=$("vpal");if(!el)return;
+  const mode=opts.viewMode;$("canvasbox").classList.toggle("haspal",PALETTE_MODES.includes(mode));if(!PALETTE_MODES.includes(mode)){el.hidden=true;return;}
+  if(vpaint&&vpaint.mode!==mode)vpaint=null;
+  el.hidden=false;el.innerHTML="";
+  const hd=document.createElement("div");hd.className="vhead";
+  const title=document.createElement("b");title.textContent=({floor:"Floor heights",ceil:"Ceiling heights",light:"Lights",type:"Polygon types",liquid:"Liquids"})[mode];hd.appendChild(title);
+  const mini=document.createElement("button");mini.className="vmin";mini.textContent=opts.vpalMin?"▸":"▾";mini.title=opts.vpalMin?"Show palette":"Hide palette";mini.onclick=()=>{opts.vpalMin=!opts.vpalMin;renderVPal();};hd.appendChild(mini);
+  el.appendChild(hd);if(opts.vpalMin)return;
+  if(mode==="light"){const tg=sel_("vpTarget",[["room","Whole room"],["floor","Floor only"],["ceil","Ceiling only"]],opts.lightTarget,v=>{opts.lightTarget=v;vpaint=null;renderVPal();redraw();});tg.title="What the light palette paints";el.appendChild(tg);}
+  const list=document.createElement("div");list.className="vlist"+(["type","liquid"].includes(mode)?" wide":mode==="light"?"":" two");
+  const cur=vpaint?vpaintKey(mode,vpaint.value):null;
+  for(const e of paletteEntries(mode)){
+    if(mode==="type"&&!e.count&&![0,1,2,3,4,5,10,11,12,13,14,16,17,18,19,20].includes(e.value))continue;
+    const b=document.createElement("button");b.className="vsw"+(e.key===cur?" on":"")+(e.count?"":" unused");b.dataset.key=e.key;
+    b.title=(e.title?e.title+" · ":"")+`${e.count} polygon${e.count===1?"":"s"}`+(mode==="type"?"":" · double-click to change it everywhere");
+    const i=document.createElement("i");i.style.background=e.color;b.appendChild(i);const s=document.createElement("span");s.textContent=e.label;b.appendChild(s);
+    b.onclick=()=>{if(vpaint&&e.key===cur)disarmPaint();else{armPaint(mode,e.value);if(tool!=="select")setTool("select");}};
+    b.ondblclick=()=>editPaletteValue(mode,e);
+    list.appendChild(b);}
+  el.appendChild(list);
+  const row=document.createElement("div");row.className="vbtns";
+  if(mode==="floor"||mode==="ceil")row.appendChild(button("Add height…",()=>askHeight("Add a height",0,v=>{opts.extraHeights=[...new Set([...(opts.extraHeights||[]),v])];armPaint(mode,v);})));
+  if(mode==="light")row.appendChild(button("Lights…",()=>openLightTable()));
+  if(mode==="liquid")row.appendChild(button("New liquid…",()=>openLiquidDialog(null,m=>{opts.extraMedia=[...(opts.extraMedia||[]),m];armPaint("liquid",m);})));
+  if(vpaint)row.appendChild(button("Stop painting",disarmPaint));
+  el.appendChild(row);}
+function askHeight(title,v0,fn){const body=document.createElement("div");const i=numInput("vpH",(v0/WU).toFixed(3),"0.125",()=>{});body.appendChild(field("Height",i,"WU"));
+  const ok=()=>{const v=parseFloat(i.value);if(!isFinite(v))return;closeModal();fn(Math.round(v*WU));};i.onkeydown=e=>{if(e.key==="Enter")ok();};
+  openModal(title,body,[button("Cancel",closeModal),button("OK",ok,"primary")]);setTimeout(()=>{i.focus();i.select();},0);}
+function editPaletteValue(mode,e){
+  if(mode==="floor"||mode==="ceil"){askHeight(`Change ${mode==="floor"?"floor":"ceiling"} ${e.label} WU everywhere`,e.value,v=>{if(v===e.value)return;pushUndo();let n=0;for(const q of doc.polys)if(q[mode]===e.value){q[mode]=v;n++;}
+      opts.extraHeights=(opts.extraHeights||[]).map(h=>h===e.value?v:h);if(vpaint&&vpaint.value===e.value)vpaint.value=v;changed();status(`Changed ${n} polygon${n===1?"":"s"} from ${e.label} to ${fmt(v)} WU.`);});}
+  else if(mode==="light"){if(e.value.t!=null)openLightEditor(e.value.t);else openLightTable();}
+  else if(mode==="liquid"&&e.value){openLiquidDialog(e.value,m=>{pushUndo();let n=0;for(const q of doc.polys)if(q.media&&mediaKeyOf(q.media)===e.key){q.media={...m};n++;}
+    opts.extraMedia=(opts.extraMedia||[]).map(x=>mediaKeyOf(x)===e.key?m:x);if(vpaint&&vpaint.mode==="liquid")vpaint.value=m;changed();status(`Updated the liquid in ${n} polygon${n===1?"":"s"}.`);});}}
+function openLiquidDialog(m0,fn){
+  const m={type:0,low:WU/2,high:WU/2,dir:0,speed:0,flags:0,...(m0||{})};delete m.mli;
+  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="8px";
+  body.appendChild(field("Liquid",sel_("ldType",MEDIA_TYPES,m.type,v=>m.type=+v)));
+  const hi=numInput("ldHigh",(m.high/WU).toFixed(3),"0.125",()=>{}),lo=numInput("ldLow",(m.low/WU).toFixed(3),"0.125",()=>{});
+  body.appendChild(field("High tide",hi,"WU"));body.appendChild(field("Low tide",lo,"WU"));
+  const Ls=tableLights();const li=sel_("ldLight",[["","Fixed (no tide light)"],...Ls.map((L,i)=>[String(i),`#${i} ${lightSummary(L)}`])],m.li!=null&&m.li<Ls.length?String(m.li):"",()=>{});
+  body.appendChild(field("Tide follows",li));
+  const dirWrap=document.createElement("div");dirWrap.className="unit";let dir=m.dir||0;const dn=numInput("ldDir",dir,"15",v=>{dir=v;dl.set(v);});const dl=dialInput("ldDial",dir,v=>{dir=v;dn.value=v;});dirWrap.appendChild(dl.el);dirWrap.appendChild(dn);const em=document.createElement("em");em.textContent="°";dirWrap.appendChild(em);
+  body.appendChild(field("Current toward",dirWrap));
+  const sp=numInput("ldSpd",m.speed||0,"1",()=>{});body.appendChild(field("Current speed",sp,"units"));
+  const n=document.createElement("p");n.className="note";n.textContent="With low and high tide set apart, the surface moves between them following the light's brightness. Add a “Liquid tide” light in Lights… to drive it.";body.appendChild(n);
+  openModal(m0?"Edit liquid":"New liquid",body,[button("Cancel",closeModal),button("OK",()=>{
+    const r={type:+$("ldType").value,high:Math.round((parseFloat(hi.value)||0)*WU),low:Math.round((parseFloat(lo.value)||0)*WU),dir:((Math.round(parseFloat(dn.value)||0)%360)+360)%360,speed:clamp(parseInt(sp.value)||0,0,512),flags:m.flags|0};
+    if(r.low>r.high)[r.low,r.high]=[r.high,r.low];if(li.value!=="")r.li=+li.value;if(m.minLight)r.minLight=m.minLight;
+    closeModal();fn(r);},"primary")]);}
+
+// ---- a small dial for directions (Forge's facing knob) ----
+function dialInput(id,deg,onchange){
+  const c=document.createElement("canvas");c.width=c.height=56;c.className="dial";c.id=id;c.title="Drag to turn (Shift for any angle)";c.tabIndex=0;let v=deg||0;
+  const draw=()=>{const g=c.getContext("2d");g.clearRect(0,0,56,56);const cs=getComputedStyle(document.documentElement);
+    g.strokeStyle=cs.getPropertyValue("--line");g.fillStyle=cs.getPropertyValue("--panel-2");g.lineWidth=1.5;g.beginPath();g.arc(28,28,24,0,Math.PI*2);g.fill();g.stroke();
+    const a=v*Math.PI/180;g.strokeStyle=cs.getPropertyValue("--accent");g.lineWidth=3;g.beginPath();g.moveTo(28,28);g.lineTo(28+Math.cos(a)*21,28+Math.sin(a)*21);g.stroke();
+    g.fillStyle=cs.getPropertyValue("--accent");g.beginPath();g.arc(28+Math.cos(a)*21,28+Math.sin(a)*21,4,0,Math.PI*2);g.fill();};
+  const fromEv=e=>{const r=c.getBoundingClientRect();let d=Math.atan2(e.clientY-r.top-r.height/2,e.clientX-r.left-r.width/2)*180/Math.PI;if(!e.shiftKey)d=Math.round(d/15)*15;return ((Math.round(d)%360)+360)%360;};
+  let dragging=false;
+  c.addEventListener("pointerdown",e=>{dragging=true;c.setPointerCapture(e.pointerId);v=fromEv(e);draw();onchange(v,false);});
+  c.addEventListener("pointermove",e=>{if(!dragging)return;v=fromEv(e);draw();onchange(v,false);});
+  c.addEventListener("pointerup",()=>{if(!dragging)return;dragging=false;onchange(v,true);});
+  c.addEventListener("keydown",e=>{if(e.key==="ArrowLeft"||e.key==="ArrowRight"){e.preventDefault();v=((v+(e.key==="ArrowRight"?15:-15))%360+360)%360;draw();onchange(v,true);}});
+  draw();return {el:c,set(d){v=d;draw();}};}
+
+// ---- spawn table (Forge's Item Parameters and Monster Parameters) ----
+// Each row: [flags, initial, minimum, maximum, random count (-1 = unlimited), random chance (0–65535)]. Flag 1 = reappears at random spots.
+function openSpawnTable(which="items"){
+  const isItems=which==="items";const names=isItems?ITEMS:MONSTERS;const kind=isItems?2:0;
+  if(!doc.placement)doc.placement={items:Array.from({length:64},()=>[0,0,0,0,0,0]),monsters:Array.from({length:64},()=>[0,0,0,0,0,0])};
+  const work=doc.placement[which].map(r=>[...r]);
+  const placed=new Array(64).fill(0);for(const o of doc.objs)if(o.kind===kind&&o.sub>=0&&o.sub<64&&polyAtPoint(o))placed[o.sub]++;
+  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="8px";
+  const tabs=document.createElement("div");tabs.className="viewmodes";for(const [k,l] of [["items","Items"],["monsters","Monsters"]]){const b=document.createElement("button");b.textContent=l;b.setAttribute("aria-pressed",k===which);b.onclick=()=>{if(k!==which){save();openSpawnTable(k);}};tabs.appendChild(b);}body.appendChild(tabs);
+  const n=document.createElement("p");n.className="note";
+  n.innerHTML=`<b>Placed</b> are the ones you put on the map. <b>Start with</b> adds extra ones at random spots when the level begins. While the level runs, the game tops each type back up to <b>Min</b>, and may add more (up to <b>Max</b>) with the <b>Chance</b> each time, until <b>Total</b> extra have appeared (∞ = no limit). <b>Random spots</b> makes them reappear anywhere instead of where they started.`;body.appendChild(n);
+  const show=document.createElement("label");show.className="checks";const sc=document.createElement("input");sc.type="checkbox";sc.id="spAll";sc.checked=!!opts.spawnAll;show.appendChild(sc);show.append(" Show every type (not just the ones placed or set up)");body.appendChild(show);
+  const wrap=document.createElement("div");wrap.className="spawnwrap";body.appendChild(wrap);
+  function draw(){wrap.innerHTML="";const t=document.createElement("table");t.className="spawn";
+    t.innerHTML=`<thead><tr><th>${isItems?"Item":"Monster"}</th><th>Placed</th><th>Start with</th><th>Min</th><th>Max</th><th>Total</th><th>Chance</th><th title="Reappear at random spots">Random spots</th></tr></thead>`;
+    const tb=document.createElement("tbody");
+    names.forEach(([,label],i)=>{const r=work[i];const set=r.some((v,k)=>k!==1&&v)||placed[i]||r[1];if(!set&&!opts.spawnAll)return;
+      const tr=document.createElement("tr");const td=x=>{const c=document.createElement("td");if(typeof x==="string")c.textContent=x;else c.appendChild(x);tr.appendChild(c);return c;};
+      td(label);td(String(placed[i])).className="num";
+      const num=(k,min,max,title)=>{const inp=document.createElement("input");inp.type="number";inp.min=min;inp.max=max;inp.value=r[k];inp.title=title||"";inp.id=`sp${which}${i}_${k}`;inp.onchange=()=>{r[k]=clamp(parseInt(inp.value)||0,min,max);inp.value=r[k];};return inp;};
+      const ini=num(1,0,255,"Total at the start, counting the ones placed (extras go to random spots)");ini.value=Math.max(r[1],placed[i]);ini.onchange=()=>{const v=clamp(parseInt(ini.value)||0,0,255);r[1]=v;if(v>placed[i])r[0]|=1;ini.value=Math.max(v,placed[i]);draw();};td(ini);
+      td(num(2,0,255));td(num(3,0,255));
+      const tw=document.createElement("span");tw.className="inf";const tot=num(4,0,32767);const inf=document.createElement("input");inf.type="checkbox";inf.id=`sp${which}${i}_inf`;inf.title="No limit";inf.checked=r[4]===-1;tot.disabled=inf.checked;if(inf.checked)tot.value="";
+      inf.onchange=()=>{r[4]=inf.checked?-1:0;draw();};tw.appendChild(tot);const il=document.createElement("label");il.appendChild(inf);il.append("∞");tw.appendChild(il);td(tw);
+      const ch=document.createElement("input");ch.type="number";ch.min=0;ch.max=100;ch.id=`sp${which}${i}_ch`;ch.value=Math.round((r[5]&0xffff)*100/65535);ch.onchange=()=>{const p=clamp(parseFloat(ch.value)||0,0,100);r[5]=Math.round(p*65535/100);ch.value=Math.round(p);};
+      const cw=document.createElement("span");cw.className="inf";cw.appendChild(ch);cw.append("%");td(cw);
+      const rnd=document.createElement("input");rnd.type="checkbox";rnd.id=`sp${which}${i}_rnd`;rnd.checked=!!(r[0]&1);rnd.onchange=()=>{r[0]=rnd.checked?r[0]|1:r[0]&~1;};const rc=td(rnd);rc.className="num";
+      tb.appendChild(tr);});
+    if(!tb.children.length){const tr=document.createElement("tr");const c=document.createElement("td");c.colSpan=8;c.className="note";c.textContent=`No ${isItems?"items":"monsters"} placed yet. Tick “Show every type” to set some up anyway.`;tr.appendChild(c);tb.appendChild(tr);}
+    t.appendChild(tb);wrap.appendChild(t);}
+  sc.onchange=()=>{opts.spawnAll=sc.checked;draw();};
+  draw();
+  const quick=document.createElement("div");quick.className="row";
+  quick.appendChild(button(isItems?"Keep placed items stocked (net games)":"Keep monsters coming back",()=>{for(let i=0;i<64;i++)if(placed[i]){const r=work[i];r[2]=Math.max(r[2],placed[i]);r[3]=Math.max(r[3],placed[i]);r[4]=-1;}draw();status("Placed types now respawn up to the number placed. Save to keep it.");}));
+  quick.appendChild(button("Clear all",()=>{for(const r of work)r.splice(0,6,0,0,0,0,0,0);draw();}));
+  body.appendChild(quick);
+  function save(){const before=JSON.stringify(doc.placement[which]);if(JSON.stringify(work)===before)return;pushUndo();doc.placement[which]=work.map(r=>[...r]);changed();}
+  openModal(isItems?"Item spawning":"Monster spawning",body,[button("Cancel",closeModal),button("Save",()=>{save();closeModal();status("Spawn table saved.");},"primary")],{wide:true});
+}
+
+// ---- which games can play this map ----
+function compatReasons(d=doc){
+  if(d.info.game==="m1")return null;const r=[];
+  if(d.info.env===3)r.push("Jjaro textures");
+  const it=new Set(d.objs.filter(o=>o.kind===2).map(o=>o.sub));if(it.has(34)||it.has(35))r.push("the KKV-7 SMG");
+  if(d.polys.some(q=>q.media&&q.media.type===4))r.push("Jjaro goo");
+  return r;}
+
 // =============================================================== wiring
 function setUI(style){opts.uiStyle=style;document.documentElement.setAttribute("data-ui",style);$("uiModern").setAttribute("aria-pressed",style==="modern");$("uiRetro").setAttribute("aria-pressed",style==="retro");readPalette();savePrefs();redraw();renderLegend();}
 $("uiModern").onclick=()=>setUI("modern");$("uiRetro").onclick=()=>setUI("retro");
@@ -2589,3 +2888,6 @@ status(legacy?"Restored your last level.":"Loaded the sample level “Cistern”
 restoreShapes().then(()=>{refreshShapesUI();let seen=false;try{seen=!!localStorage.getItem("forge-remake-setup");}catch(e){}if(!seen&&!GAME_IDS.some(g=>shapeStore[g])&&$("modal").hidden)openShapesDialog(true);});
 requestAnimationFrame(()=>{resize();fitView();});
 window.__forge={scenario,switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,shapeStore,texCount,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,newDoc,setDoc:d=>{doc=d;changed();}};
+Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
+  screenOf(x,y){const r=canvas.getBoundingClientRect();const [sx,sy]=toS(x,y);return {x:r.left+sx,y:r.top+sy};},centroid,fitView});
+Object.defineProperty(window.__forge,"vpaint",{get:()=>vpaint});
