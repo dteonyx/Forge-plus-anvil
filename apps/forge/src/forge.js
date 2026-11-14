@@ -2174,22 +2174,54 @@ function open3D(){
   const camera=new THREE.PerspectiveCamera(75,1,0.05,200);
   const S=1/WU;
   const mats=new Map();const disposables=[];
-  function matFor(key){if(mats.has(key))return mats.get(key);const [b,col,clut,kind]=key.split(":");const src=texCanvasFor(+b,col===""?undefined:+col,+clut);
+  // transfer modes are shown live: each animated group has its own texture, moved every frame by animateXfers
+  const anims=[];
+  function skyMaterial(t,src){t.minFilter=THREE.NearestFilter;t.generateMipmaps=false; // no mipmaps: the seam where the angle wraps would show
+    // Landscape: the texture is pinned to the view direction, not the surface, like Aleph One (it repeats twice around the circle)
+    return new THREE.ShaderMaterial({uniforms:{map:{value:t},rep:{value:2},aspect:{value:src.height/Math.max(1,src.width)}},side:THREE.DoubleSide,
+      vertexShader:"varying vec3 vW;void main(){vec4 w=modelMatrix*vec4(position,1.0);vW=w.xyz;gl_Position=projectionMatrix*viewMatrix*w;}",
+      fragmentShader:"uniform sampler2D map;uniform float rep;uniform float aspect;varying vec3 vW;void main(){vec3 d=normalize(vW-cameraPosition);"+
+        "float u=atan(d.z,d.x)/6.2831853*rep;float span=6.2831853/rep*aspect;float v=clamp(0.5+asin(clamp(d.y,-1.0,1.0))/span,0.002,0.998);gl_FragColor=texture2D(map,vec2(u,v));}"});}
+  function matFor(key){if(mats.has(key))return mats.get(key);const [b,col,clut,kind,xs]=key.split(":");const xf=+xs||0;const src=texCanvasFor(+b,col===""?undefined:+col,+clut);
+    if(xf===XFER_LANDSCAPE&&kind!=="m"){const t=new THREE.CanvasTexture(src);t.magFilter=THREE.NearestFilter;t.wrapS=THREE.RepeatWrapping;t.wrapT=THREE.ClampToEdgeWrapping;const m=skyMaterial(t,src);mats.set(key,m);disposables.push(t,m);return m;}
+    if(xf===7){ // Static: noise instead of the texture, redrawn every frame
+      const cvs=document.createElement("canvas");cvs.width=cvs.height=64;const t=new THREE.CanvasTexture(cvs);t.magFilter=t.minFilter=THREE.NearestFilter;t.generateMipmaps=false;t.wrapS=t.wrapT=THREE.RepeatWrapping;
+      const m=new THREE.MeshBasicMaterial({map:t,vertexColors:true,side:THREE.DoubleSide});mats.set(key,m);disposables.push(t,m);anims.push({t,xf,cvs});return m;}
     let cvs=src;if(kind==="t"){cvs=document.createElement("canvas");cvs.width=src.width;cvs.height=src.height;const g=cvs.getContext("2d");g.drawImage(src,0,0);const im=g.getImageData(0,0,cvs.width,cvs.height);
       const r0=im.data[0],g0=im.data[1],b0=im.data[2];for(let i=0;i<im.data.length;i+=4)if(im.data[i]===r0&&im.data[i+1]===g0&&im.data[i+2]===b0)im.data[i+3]=0;g.putImageData(im,0,0);}
     const t=new THREE.CanvasTexture(cvs);t.magFilter=THREE.NearestFilter;t.minFilter=THREE.NearestMipmapLinearFilter;t.wrapS=t.wrapT=THREE.RepeatWrapping;
     const m=kind==="m"?new THREE.MeshBasicMaterial({color:0xffffff,map:t,vertexColors:true,side:THREE.DoubleSide,transparent:true,opacity:0.65,depthWrite:false})
-      :new THREE.MeshBasicMaterial({map:t,vertexColors:true,side:THREE.DoubleSide,transparent:kind==="t",alphaTest:kind==="t"?0.5:0});mats.set(key,m);disposables.push(t,m);return m;}
+      :xf===2?new THREE.MeshBasicMaterial({map:t,vertexColors:true,side:THREE.DoubleSide,transparent:true,opacity:0.25,depthWrite:false}) // Invisible: shown faintly so it can still be found
+      :new THREE.MeshBasicMaterial({map:t,vertexColors:true,side:THREE.DoubleSide,transparent:kind==="t",alphaTest:kind==="t"?0.5:0});mats.set(key,m);disposables.push(t,m);
+    if(xf===4||xf===5||xf===6){ // Pulsate and wobble bend the texture in place (a gentle wave inside each tile, so nothing drifts)
+      const k=xf===6?2:1;m.onBeforeCompile=sh=>{sh.uniforms.xT=xferTime;sh.fragmentShader="uniform float xT;\n"+sh.fragmentShader.replace("#include <map_fragment>",
+        "#ifdef USE_MAP\nfloat ph=xT*6.2831853/64.0*"+k.toFixed(1)+";\n"+
+        (xf===4?"vec2 wuv=vUv+0.045*sin(ph)*sin(6.2831853*vUv);\n":"vec2 wuv=vUv+vec2(0.035*sin(6.2831853*vUv.y+ph),0.035*sin(6.2831853*vUv.x+ph*1.3));\n")+
+        "vec4 texelColor=mapTexelToLinear(texture2D(map,wuv));diffuseColor*=texelColor;\n#endif");};
+      m.customProgramCacheKey=()=>"xfer"+xf;}
+    else if(xf&&xf!==2)anims.push({t,xf});return m;}
+  // Speeds follow Aleph One (30 ticks a second): slides move 1/64 WU a tick (fast: 1/32); pulsate and wobble repeat every 64 ticks (fast wobble: 32)
+  const xferTime={value:0};
+  function animateXfers(sec){const tk=sec*30;xferTime.value=tk%(64*64);
+    for(const a of anims){const t=a.t;
+      switch(a.xf){
+        case 15:t.offset.x=-tk/64;break; case 16:t.offset.x=-tk/32;break;
+        case 17:t.offset.y=tk/64;break; case 18:t.offset.y=tk/32;break;
+        case 19:case 20:{const p=tk*(a.xf===20?2:1)*2*Math.PI/512,q=tk*(a.xf===20?2:1)*2*Math.PI/768;
+          t.offset.set((Math.cos(p)+Math.cos(2*p)+Math.cos(5*p))/12,(Math.sin(q)+Math.sin(2*q)+Math.sin(5*q))/12);break;}
+        case 7:{if(a.last===Math.floor(tk))break;a.last=Math.floor(tk);const g=a.cvs.getContext("2d"),im=g.createImageData(64,64);
+          for(let i=0;i<im.data.length;i+=4){const v=Math.random()*255|0;im.data[i]=im.data[i+1]=im.data[i+2]=v;im.data[i+3]=255;}g.putImageData(im,0,0);t.needsUpdate=true;break;}
+      }}}
   let meshes=[],geos=[];const surfOf=new Map();let sprites=[];
   function build(){
     for(const m of meshes)scene.remove(m);for(const g of geos)g.dispose();meshes=[];geos=[];surfOf.clear();
     for(const s of sprites){scene.remove(s);s.material.map.dispose();s.material.dispose();}sprites=[];
-    const groups=new Map();const grp=(b,col,clut,kind="")=>{const key=`${b}:${col??""}:${clut|0}:${kind}`;if(!groups.has(key))groups.set(key,{b:key,pos:[],uv:[],col:[],surf:[]});return groups.get(key);};
+    const groups=new Map();const SHOWN=new Set([2,4,5,6,7,9,15,16,17,18,19,20]);const grp=(b,col,clut,kind="",xf=0)=>{const key=`${b}:${col??""}:${clut|0}:${kind}:${SHOWN.has(xf|0)?xf|0:0}`;if(!groups.has(key))groups.set(key,{b:key,pos:[],uv:[],col:[],surf:[]});return groups.get(key);};
     const PI=platformInfo(doc);const H=q=>{const r=PI.get(q);return r&&!openDoors?{floor:r.floor,ceil:r.ceil}:r&&openDoors?{floor:r.minF,ceil:r.maxC}:q;};
     const edgeOwner=new Map();doc.polys.forEach((q,i)=>q.verts.forEach((v,k)=>edgeOwner.set(sideKey(v,q.verts[(k+1)%q.verts.length]),i)));
     const lv=p=>0.2+0.8*p/100;
     function quad(q,a,b,y0,y1,part,orient){
-      if(y1-y0<1)return;const t=part==="trans"?((sideGet(a,b)||{}).trans):wallTex(q,a,b,part);if(!t)return;const g=grp(t.b,t.col,t.clut,part==="trans"?"t":"");const len=Math.hypot(b.x-a.x,b.y-a.y);const shade=lv(t.light??q.light)*orient;
+      if(y1-y0<1)return;const t=part==="trans"?((sideGet(a,b)||{}).trans):wallTex(q,a,b,part);if(!t)return;const g=grp(t.b,t.col,t.clut,part==="trans"?"t":"",t.xfer);const len=Math.hypot(b.x-a.x,b.y-a.y);const shade=lv(t.light??q.light)*orient;
       const P=[[a.x*S,y0*S,a.y*S],[b.x*S,y0*S,b.y*S],[b.x*S,y1*S,b.y*S],[a.x*S,y1*S,a.y*S]];
       const u0=(t.ox||0)/WU,u1=(len+(t.ox||0))/WU,vt=-(t.oy||0)/WU,vb=-((y1-y0)+(t.oy||0))/WU;
       const U=[[u0,vb],[u1,vb],[u1,vt],[u0,vt]];
@@ -2198,7 +2230,7 @@ function open3D(){
     doc.polys.forEach(q0=>{
       const q=q0,h=H(q0),F=h.floor,C=h.ceil;
       const fl=lv(q.flight??q.light),cl=lv(q.clight??q.light)*0.9;
-      const fg=grp(q.ftex,q.fcol,q.fclut),cg=grp(q.ctex,q.ccol,q.cclut);const fs={kind:"floor",poly:q},cs={kind:"ceil",poly:q};
+      const fg=grp(q.ftex,q.fcol,q.fclut,"",q.fxfer),cg=grp(q.ctex,q.ccol,q.cclut,"",q.cxfer);const fs={kind:"floor",poly:q},cs={kind:"ceil",poly:q};
       fs.corners=q.verts.map(v=>[v.x*S,F*S+0.002,v.y*S]);cs.corners=q.verts.map(v=>[v.x*S,C*S-0.002,v.y*S]);
       for(let k=1;k<q.verts.length-1;k++){const tri=[q.verts[0],q.verts[k],q.verts[k+1]];
         for(const v of tri){fg.pos.push(v.x*S,F*S,v.y*S);fg.uv.push((v.x+(q.fox||0))/WU,-(v.y+(q.foy||0))/WU);fg.col.push(fl,fl,fl);}fg.surf.push(fs);
@@ -2293,7 +2325,7 @@ function open3D(){
   mouseBtn.onclick=()=>lockMouse(document.pointerLockElement!==cv);
   document.addEventListener("pointerlockchange",showMouseMode);
   const shBtn=wrap.querySelector("#h3shapes");shBtn.hidden=realTextures();shBtn.onclick=()=>{try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}openShapesDialog(false);};
-  const onShapes=()=>{mats.forEach(m=>{m.map.dispose();m.dispose();});mats.clear();build();shBtn.hidden=realTextures();if(paletteShown)renderPalette();};
+  const onShapes=()=>{mats.forEach(m=>{const t=m.map||(m.uniforms&&m.uniforms.map.value);if(t)t.dispose();m.dispose();});mats.clear();anims.length=0;build();shBtn.hidden=realTextures();if(paletteShown)renderPalette();};
   window.addEventListener("forge-shapes",onShapes);
   const onKey=e=>{if(!$("modal").hidden)return;if(e.target&&e.target.tagName==="INPUT"&&e.key!=="Escape")return;const k=e.key.toLowerCase();
     if((e.ctrlKey||e.metaKey)&&k==="z"){e.preventDefault();e.shiftKey?redo():undo();refresh();return;}
@@ -2404,7 +2436,7 @@ function open3D(){
     const cp=Math.cos(st.pitch);camera.lookAt(camera.position.x+Math.cos(st.yaw)*cp,camera.position.y+Math.sin(st.pitch),camera.position.z+Math.sin(st.yaw)*cp);
     if(dragDirty){dragDirty=false;refresh();}
     updateAim();if(aim!==lastAim||drag){aimEl.textContent=describe(aim);lastAim=aim;}
-    renderer.render(scene,camera);
+    animateXfers(now/1000);renderer.render(scene,camera);
     const q=polyAtPoint(st);posEl.textContent=`x ${(st.x/WU).toFixed(2)} y ${(st.y/WU).toFixed(2)} · ${q?"polygon "+doc.polys.indexOf(q):"outside"}`;
     raf=requestAnimationFrame(frame);}
   raf=requestAnimationFrame(frame);
