@@ -86,6 +86,9 @@ Format facts confirmed while building are in "Format notes" below.
 - [x] Render the level in 3D with the real textures (numbered stand-ins when no Shapes file is loaded)
 - [x] Walk mode (steps, gravity, headroom, solid lines) and fly mode; touch d-pad
 - [x] Paint mode (visual mode): click to paint walls/floors/ceilings, Shift+click paints a whole room, eyedropper, J/L/I/K texture offsets, +/− light, undo
+- [x] Drag a surface to slide its texture; touching pieces with the same texture move and line up as one, like Forge (Ctrl moves one piece); Shift+drag raises or lowers a floor or ceiling
+- [x] Mouse look (hold the right button, or M to lock the mouse); mouse wheel picks textures; any wall set or sky on any level
+- [x] Transfer modes shown live: landscape (sky), slides, wander, pulsate, wobble, static, invisible (Forge.exe 0.10.0)
 
 ### Phase 5 — Anvil-style tools
 - [~] Shapes reading: wall collections decoded for Marathon 1 (resource fork; MacBinary/AppleSingle) and Durandal/Infinity; sprites and sequences not yet
