@@ -370,3 +370,22 @@ test("any texture set can be used on any level, and it survives export", async (
   await page.evaluate(() => window.__forge.removeShapes("inf"));
   assert.deepEqual(errors, []);
 });
+
+test("a wall's texture run follows connected pieces in the same line with the same texture", async () => {
+  const r = await app.page.evaluate(() => {
+    const f = window.__forge;
+    f.setDoc(f.newDoc("inf"));
+    f.buildFromSpec({ name: "Run", environment: "water", rooms: [
+      { id: "A", x: 0, y: 0, w: 4, h: 4, floor: 0, ceiling: 2, wallTex: 5 },
+      { id: "B", x: 4, y: 0, w: 3, h: 4, floor: 0, ceiling: 2, wallTex: 5 },
+      { id: "C", x: 7, y: 0, w: 3, h: 4, floor: 0, ceiling: 2, wallTex: 8 } ], objects: [] }, { replace: true });
+    const d = f.doc, WU = 1024;
+    // the north wall of room A: the side running along y = 0 inside polygon A
+    const qa = d.polys.find((q) => q.verts.every((v) => v.x <= 4 * WU));
+    const k = qa.verts.findIndex((v, i) => { const w = qa.verts[(i + 1) % qa.verts.length]; return v.y === 0 && w.y === 0; });
+    const run = f.wallRun(qa, qa.verts[k], qa.verts[(k + 1) % qa.verts.length], "full");
+    return run.map((m) => [m.a.x / WU, m.b.x / WU, m.part]);
+  });
+  // A (texture 5) continues into B (texture 5) but stops at C (texture 8)
+  assert.deepEqual(r, [[0, 4, "full"], [4, 7, "full"]]);
+});

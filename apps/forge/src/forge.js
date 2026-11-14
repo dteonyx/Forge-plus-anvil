@@ -2044,6 +2044,21 @@ function spriteFor(o){
   const t=new THREE.CanvasTexture(c);t.magFilter=THREE.NearestFilter;
   return new THREE.Sprite(new THREE.SpriteMaterial({map:t,transparent:true,depthWrite:false}));
 }
+// The run of wall pieces a texture drag moves together, like Forge: starting from one side (a→b of polygon q), follow
+// connected sides that continue in the same straight line and the same direction and show the same texture (same set).
+function wallRun(q,a,b,part){
+  const t0=wallTex(q,a,b,part),key=t=>`${t.b}:${ownCol(t.col)??""}`,k0=key(t0);
+  const L=Math.hypot(b.x-a.x,b.y-a.y)||1,dx=(b.x-a.x)/L,dy=(b.y-a.y)/L;
+  const onLine=p=>Math.abs((p.x-a.x)*dy-(p.y-a.y)*dx)<=2;
+  const from=new Map(),to=new Map(); // sides on this line, keyed by their start and end points
+  for(const pq of doc.polys)pq.verts.forEach((u,k)=>{const v=pq.verts[(k+1)%pq.verts.length];const l=Math.hypot(v.x-u.x,v.y-u.y);if(!l)return;
+    if(((v.x-u.x)*dx+(v.y-u.y)*dy)/l<0.999||!onLine(u)||!onLine(v))return;const e={q:pq,a:u,b:v};from.set(u,e);to.set(v,e);});
+  const pick=e=>{for(const pt of ["full","upper","lower"]){const s=sideGet(e.a,e.b)||{};const t=wallTex(e.q,e.a,e.b,pt);if((s[pt]||pt==="full"||pt===part)&&key(t)===k0)return {...e,part:pt};}return null;};
+  const run=[{q,a,b,part}];
+  for(let e=from.get(b),n=0;e&&n<64;e=from.get(e.b),n++){const m=pick(e);if(!m||m.a===a)break;run.push(m);}
+  for(let e=to.get(a),n=0;e&&n<64;e=to.get(e.a),n++){const m=pick(e);if(!m||m.b===b)break;run.unshift(m);}
+  return run;
+}
 function wallTex(q,a,b,part){const s=sideGet(a,b)||{};const def={b:q.wtex,ox:0,oy:0};
   if(part==="full")return s.full||s.upper||s.lower||def;if(part==="upper")return s.upper||s.full||def;return s.lower||s.full||def;}
 // Transfer modes Forge offered for surfaces (Aleph One numbering)
@@ -2131,7 +2146,7 @@ function open3D(){
     <div class="help" id="h3help"></div></div>
   <div class="crosshair" id="h3cross"></div>
   <div class="paintbar" id="h3bar">
-    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Click or Space paints · Shift+Space paints the whole room · drag a surface to slide its texture · Shift+drag a floor or ceiling to raise or lower it · G or Alt-click picks up · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
+    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Click or Space paints · Shift+Space paints the whole room · drag a surface to slide its texture (a wall drags its whole run; Ctrl drags one piece) · Shift+drag a floor or ceiling to raise or lower it · G or Alt-click picks up · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
       <span class="paintopts"><label>Set <select id="h3set"></select></label><label><input type="checkbox" id="h3applyTex"> Apply texture</label><label><input type="checkbox" id="h3applyLight"> Apply light</label><label>Light <input type="number" id="h3light" min="0" max="100" step="5"> %</label></span></div>
     <div class="palette" id="h3pal"></div></div>
   <div class="pad" id="h3pad"><button data-a="paint" aria-label="Paint">Paint</button><button data-k="f" aria-label="Forward">▲</button><button data-a="edit" aria-label="Edit surface">Edit</button><button data-k="l" aria-label="Turn left">◀</button><button data-k="b" aria-label="Back">▼</button><button data-k="r" aria-label="Turn right">▶</button></div>`;
@@ -2284,6 +2299,8 @@ function open3D(){
     const d={sf,wpp,shift:e.shiftKey,moved:0,undo:false,sx:e.clientX,sy:e.clientY,yaw:st.yaw};
     if(d.shift&&(sf.kind==="floor"||sf.kind==="ceil"))d.h0=sf.kind==="floor"?q.floor:q.ceil;
     else{const t=texOfSurf(sf);d.ox0=sf.kind==="floor"?q.fox||0:sf.kind==="ceil"?q.cox||0:t.ox||0;d.oy0=sf.kind==="floor"?q.foy||0:sf.kind==="ceil"?q.coy||0:t.oy||0;
+      // a wall drag moves every connected piece in the same line with the same texture (Ctrl moves just this one)
+      if(sf.kind==="wall"&&sf.part!=="trans")d.run=(e.ctrlKey||e.metaKey?[{q,a:sf.a,b:sf.b,part:sf.part}]:wallRun(q,sf.a,sf.b,sf.part)).map(m=>{const t=wallTex(m.q,m.a,m.b,m.part);return {...m,ox0:t.ox||0,oy0:t.oy||0};});
       if(sf.kind==="wall"){const rx=-Math.sin(st.yaw),ry=Math.cos(st.yaw),wx=sf.b.x-sf.a.x,wy=sf.b.y-sf.a.y,wl=Math.hypot(wx,wy)||1;d.along=Math.sign((wx*rx+wy*ry)/wl)||1;}}
     return d;}
   function moveDrag(d,dx,dy){d.moved+=Math.abs(dx)+Math.abs(dy);d.tx=(d.tx||0)+dx;d.ty=(d.ty||0)+dy;if(d.moved<6)return;
@@ -2291,8 +2308,10 @@ function open3D(){
     if(d.h0!=null){const snap=e=>Math.round(e/32)*32;let h=snap(d.h0-d.ty*W);
       if(sf.kind==="floor"){h=Math.min(h,q.ceil);q.floor=h;}else{h=Math.max(h,q.floor);q.ceil=h;}
       status(`${sf.kind==="floor"?"Floor":"Ceiling"} of polygon ${doc.polys.indexOf(q)}: ${fmt(h)}`);}
-    else if(sf.kind==="wall"){const ox=Math.round(d.ox0-d.along*d.tx*W),oy=Math.round(d.oy0-d.ty*W);const t=texOfSurf(sf);sideSet(sf.a,sf.b,sf.part,{...t,ox,oy});
-      status(`Texture offset ${(ox/WU).toFixed(3)}, ${(oy/WU).toFixed(3)} WU`);}
+    else if(sf.kind==="wall"){const ddx=Math.round(d.along*d.tx*W),ddy=Math.round(d.ty*W);
+      if(d.run)for(const m of d.run){const t=wallTex(m.q,m.a,m.b,m.part);sideSet(m.a,m.b,m.part,{...t,ox:m.ox0-ddx,oy:m.oy0-ddy});}
+      else{const t=texOfSurf(sf);sideSet(sf.a,sf.b,sf.part,{...t,ox:d.ox0-ddx,oy:d.oy0-ddy});}
+      status(`Texture offset ${((d.ox0-ddx)/WU).toFixed(3)}, ${((d.oy0-ddy)/WU).toFixed(3)} WU${d.run&&d.run.length>1?` · ${d.run.length} wall pieces in this run`:""}`);}
     else{const rx=-Math.sin(d.yaw),ry=Math.cos(d.yaw),fx=Math.cos(d.yaw),fy=Math.sin(d.yaw);
       const wx=(d.tx*rx-d.ty*fx)*W,wy=(d.tx*ry-d.ty*fy)*W; const k=sf.kind==="floor"?"f":"c"; // screen right = camera right; screen up = away from the camera
       q[k+"ox"]=Math.round(d.ox0-wx);q[k+"oy"]=Math.round(d.oy0-wy);status(`Texture offset ${(q[k+"ox"]/WU).toFixed(3)}, ${(q[k+"oy"]/WU).toFixed(3)} WU`);}
@@ -3094,7 +3113,7 @@ status(legacy?"Restored your last level.":"Loaded the sample level “Cistern”
 (async()=>{try{const s=await idb.get("scenario");if(s){loadScenarioObject(JSON.parse(s));afterLoad(`Restored “${scenario.name}” (${scenario.levels.length} level${scenario.levels.length>1?"s":""}).`);fitView();}}catch(e){}})();
 restoreShapes().then(()=>{refreshShapesUI();let seen=false;try{seen=!!localStorage.getItem("forge-remake-setup");}catch(e){}if(!seen&&!GAME_IDS.some(g=>shapeStore[g])&&$("modal").hidden)openShapesDialog(true);});
 requestAnimationFrame(()=>{resize();fitView();});
-window.__forge={scenario,switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,newDoc,setDoc:d=>{doc=d;changed();}};
+window.__forge={scenario,switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,newDoc,setDoc:d=>{doc=d;changed();}};
 Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
   screenOf(x,y){const r=canvas.getBoundingClientRect();const [sx,sy]=toS(x,y);return {x:r.left+sx,y:r.top+sy};},centroid,fitView});
 Object.defineProperty(window.__forge,"vpaint",{get:()=>vpaint});
