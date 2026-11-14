@@ -2161,7 +2161,7 @@ function open3D(){
     <div class="help" id="h3help"></div></div>
   <div class="crosshair" id="h3cross"></div>
   <div class="paintbar" id="h3bar">
-    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Click or Space paints · Shift+Space paints the whole room · drag a surface to slide its texture (everything touching with the same texture moves and lines up; Ctrl moves one piece) · Shift+drag a floor or ceiling to raise or lower it · G or Alt-click picks up · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
+    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Click or Space paints · Shift+Space paints the whole room · mouse wheel or [ ] picks the texture · drag a surface to slide its texture (everything touching with the same texture moves and lines up; Ctrl moves one piece) · Shift+drag a floor or ceiling to raise or lower it · G or Alt-click picks up · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
       <span class="paintopts"><label>Set <select id="h3set"></select></label><label><input type="checkbox" id="h3applyTex"> Apply texture</label><label><input type="checkbox" id="h3applyLight"> Apply light</label><label>Light <input type="number" id="h3light" min="0" max="100" step="5"> %</label></span></div>
     <div class="palette" id="h3pal"></div></div>
   <div class="pad" id="h3pad"><button data-a="paint" aria-label="Paint">Paint</button><button data-k="f" aria-label="Forward">▲</button><button data-a="edit" aria-label="Edit surface">Edit</button><button data-k="l" aria-label="Turn left">◀</button><button data-k="b" aria-label="Back">▼</button><button data-k="r" aria-label="Turn right">▶</button></div>`;
@@ -2349,6 +2349,15 @@ function open3D(){
     dragDirty=true;}
   function endDrag(d){if(!d)return;if(d.moved<6){updateAim();paint(d.shift);return;}if(dragDirty){dragDirty=false;refresh();}changed();}
   cv.addEventListener("contextmenu",e=>e.preventDefault());
+  // the mouse wheel steps through the textures in the palette (one step per notch; trackpads add up small scrolls)
+  let wheelAcc=0;
+  cv.addEventListener("wheel",e=>{e.preventDefault();if(!paletteShown)setPalette(true);
+    // a mouse-wheel notch (~100) is one step; small trackpad scrolls add up, and changing direction starts afresh
+    const dy=e.deltaMode===1?e.deltaY*40:e.deltaY;let steps;
+    if(Math.abs(dy)>=50){steps=Math.sign(dy)*Math.max(1,Math.round(Math.abs(dy)/100));wheelAcc=0;}
+    else{if(Math.sign(dy)!==Math.sign(wheelAcc))wheelAcc=0;wheelAcc+=dy;steps=Math.trunc(wheelAcc/80);if(!steps)return;wheelAcc-=steps*80;}
+    const n=texCountFor(paintCol);if(!n)return;paintTex=((paintTex+Math.sign(steps)*Math.min(Math.abs(steps),3))%n+n)%n;renderPalette();
+    status(`${isLandCol(paintCol)?"Sky":"Texture"} ${paintTex}${paintCol!=null&&!isLandCol(paintCol)?" ("+setName(paintCol).trim()+")":""}`);},{passive:false});
   cv.addEventListener("pointerdown",e=>{
     const locked=document.pointerLockElement===cv;
     if(e.button===2){if(locked){updateAim();editSurface();return;}
