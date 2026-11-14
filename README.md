@@ -10,6 +10,7 @@ Remakes of Bungie's Marathon editing tools for [Aleph One](https://alephone.lhow
 ## Forge
 
 - Draw and edit levels in 2D: rooms, lines, polygons, heights, lights, textures, objects.
+- Forge-style palettes: pick a height, light, type or liquid and paint it across polygons. Light table editor (strobes, flicker, tides) and item/monster spawning tables.
 - See and walk the level in 3D, and paint walls, floors and ceilings while walking.
 - Real textures from **your own** Shapes files for Marathon, Durandal and Infinity (Aleph One Shapes work too).
 - Doors, lifts, liquids, terminals with pictures, chapter screens, per-level physics, whole scenarios.
@@ -39,6 +40,12 @@ To also test against Bungie's Infinity map, point `MARATHON_MAP` at your copy:
 
 ```sh
 MARATHON_MAP="/path/to/Marathon Infinity/Map.sceA" npm test
+```
+
+Or a whole folder of maps (each one must round-trip), such as the levels from the original Infinity disc:
+
+```sh
+MARATHON_MAPS_DIR="/path/to/maps" npm test
 ```
 
 ## Layout
