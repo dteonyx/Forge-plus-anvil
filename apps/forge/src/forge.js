@@ -11,6 +11,10 @@ const ENVS = [
   {name:"Pfhor", col:21, wall:[104,86,124], floor:[70,60,86], ceil:[116,100,134], panel:[170,110,200]},
 ];
 const LANDSCAPES = ["Daytime","Night","Moon","Outer space"];
+// Landscape (sky) textures live in their own collections, 27-30, one per landscape (Daytime, Night, Moon, Outer space).
+// A surface shows the sky when its texture comes from the level's landscape collection and its transfer mode is Landscape (9).
+const LANDSCAPE_COL=27,XFER_LANDSCAPE=9;
+const isLandCol=col=>col!=null&&col>=LANDSCAPE_COL&&col<LANDSCAPE_COL+4;
 const POLY_TYPES = [
   [0,"Normal"],[1,"Item impassable"],[2,"Monster impassable"],[3,"Hill (King of the Hill)"],[4,"Base (team)"],[5,"Door or lift (platform)"],[6,"Light on trigger"],[7,"Platform on trigger"],[8,"Light off trigger"],[9,"Platform off trigger"],
   [10,"Teleporter"],[11,"Zone border"],[12,"Goal"],[13,"Visible monster trigger"],[14,"Invisible monster trigger"],
@@ -1099,7 +1103,7 @@ function draw(){
   const bad=new Set(issues.filter(i=>i.lv==="error"&&i.target&&i.target.kind==="poly").flatMap(i=>i.target.items));
   for(const q of doc.polys){
     ctx.beginPath();q.verts.forEach((v,i)=>{const [x,y]=toS(v.x,v.y);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.closePath();
-    if(opts.viewMode==="tex"){const t=texPattern(q.ftex);const [ox,oy]=toS(-(q.fox||0),-(q.foy||0));const sc=WU*view.scale/t.w;
+    if(opts.viewMode==="tex"){const t=texPattern(q.ftex,q.fcol,q.fclut);const [ox,oy]=toS(-(q.fox||0),-(q.foy||0));const sc=WU*view.scale/t.w;
       try{t.p.setTransform(new DOMMatrix([sc,0,0,sc,ox,oy]));}catch(_){}ctx.fillStyle=t.p;ctx.fill();
       ctx.fillStyle="#000";ctx.globalAlpha=(1-q.light/100)*0.7;ctx.fill();ctx.globalAlpha=1;}
     else{ctx.fillStyle=polyFill(q,range);ctx.globalAlpha=opts.uiStyle==="retro"&&opts.viewMode==="draw"?1:0.92;ctx.fill();ctx.globalAlpha=1;}
@@ -1883,7 +1887,7 @@ function shapeCanvas(game,colIdx,shapeIdx,clut=0){
   const key=game+":"+colIdx+":"+shapeIdx+":"+clut;if(texCache.has(key))return texCache.get(key);
   let cv=null;
   try{const st=shapeStore[game];const c=st&&st.parsed.cols[colIdx];if(c){const d=decodeCollection(c);
-    let bi=shapeIdx;if(d.type===1&&d.ll.length&&shapeIdx<d.ll.length)bi=d.ll[shapeIdx];
+    let bi=shapeIdx;if((d.type===1||isLandCol(colIdx))&&d.ll.length&&shapeIdx<d.ll.length)bi=d.ll[shapeIdx];
     if(bi>=0&&bi<d.bmOffs.length){const bm=decodeBitmap(c,bi);const tab=d.cluts[clut]||d.cluts[0];
       cv=document.createElement("canvas");cv.width=bm.w;cv.height=bm.h;const g=cv.getContext("2d");const img=g.createImageData(bm.w,bm.h);
       for(let k=0;k<bm.pix.length;k++){const ci=bm.pix[k]*4;img.data[k*4]=tab[ci];img.data[k*4+1]=tab[ci+1];img.data[k*4+2]=tab[ci+2];img.data[k*4+3]=255;}
@@ -1906,8 +1910,14 @@ function proceduralTex(bitmap,envIdx){
   texCache.set(key,c);return c;
 }
 // texture for the current level: real if a Shapes file is loaded, otherwise a numbered stand-in
-function texCanvasFor(bitmap,col,clut){const s=shapesFor(doc.info.game);if(s){const cv=shapeCanvas(s.game,col??(17+doc.info.env),bitmap,clut|0);if(cv)return cv;}return proceduralTex(bitmap+(col!=null?1000*col:0),doc.info.env);}
+function texCanvasFor(bitmap,col,clut){const s=shapesFor(doc.info.game);if(s){const cv=shapeCanvas(s.game,col??(17+doc.info.env),bitmap,clut|0);if(cv)return cv;}if(isLandCol(col))return skyStandIn(col);return proceduralTex(bitmap+(col!=null?1000*col:0),doc.info.env);}
 function texCount(){const s=shapesFor(doc.info.game);if(s){const c=s.st.parsed.cols[17+doc.info.env];if(c){try{return decodeCollection(c).count;}catch(e){}}}return 30;}
+function landCol(){return LANDSCAPE_COL+clamp(doc.info.landscape|0,0,3);}
+// how many sky textures the level's landscape has: 0 when the Shapes file has none (Marathon 1), 1 stand-in without Shapes
+function landCount(){const s=shapesFor(doc.info.game);if(s){const c=s.st.parsed.cols[landCol()];if(c){try{const d=decodeCollection(c);return d.ll.length||d.bmOffs.length;}catch(e){}}return 0;}return doc.info.game==="m1"?0:1;}
+function skyStandIn(col){const key="sky:"+col;if(texCache.has(key))return texCache.get(key);const c=document.createElement("canvas");c.width=c.height=64;const g=c.getContext("2d");
+  const top=[[96,130,170],[14,16,30],[30,30,40],[2,2,8]][col-LANDSCAPE_COL]||[0,0,0];const gr=g.createLinearGradient(0,0,0,64);gr.addColorStop(0,`rgb(${top})`);gr.addColorStop(1,`rgb(${top.map(v=>Math.min(255,v+60))})`);
+  g.fillStyle=gr;g.fillRect(0,0,64,64);g.fillStyle="rgba(255,255,255,.85)";g.font="bold 13px monospace";g.fillText("sky",4,60);texCache.set(key,c);return c;}
 function realTextures(){return !!shapesFor(doc.info.game);}
 // IndexedDB storage for Shapes files
 const idb={db:null,
@@ -1954,9 +1964,11 @@ function openShapesDialog(first){
   openModal(first?"Set up your Shapes files":"Shapes files",body,first?[button("Add later",()=>{done();toast("You can load Shapes files any time from the Shapes button.");}),button("Done",done,"primary")]:[button("Done",done,"primary")]);
 }
 // texture picker (grid of thumbnails)
-function thumb(bitmap,size=40){const c=document.createElement("canvas");c.width=c.height=size;const g=c.getContext("2d");g.imageSmoothingEnabled=false;const src=texCanvasFor(bitmap);g.drawImage(src,0,0,size,size);return c;}
-function openTexturePicker(title,current,onPick){
+function thumb(bitmap,size=40,col){const c=document.createElement("canvas");c.width=c.height=size;const g=c.getContext("2d");g.imageSmoothingEnabled=false;const src=texCanvasFor(bitmap,col);g.drawImage(src,0,0,size,size);return c;}
+// current is a texture number, or {b,col} for a surface; withSky adds the level's landscape textures (onPick gets their collection)
+function openTexturePicker(title,current,onPick,withSky){
   const body=document.createElement("div");
+  const curCol=current&&typeof current==="object"?current.col:null;const skyCur=current&&typeof current==="object"?current.b:null;if(current&&typeof current==="object")current=isLandCol(curCol)?-1:current.b;
   const n=texCount();
   const note=document.createElement("p");note.className="note";note.textContent=realTextures()?`${n} textures in the ${ENVS[doc.info.env].name} set of ${GAMES[shapesFor(doc.info.game).game].short}.`:"Showing numbered stand-ins. Load your Shapes file to see the real textures.";
   body.appendChild(note);
@@ -1964,6 +1976,12 @@ function openTexturePicker(title,current,onPick){
   for(let i=0;i<n;i++){const sp=texSpecial(i);const b=document.createElement("button");b.className="texbtn"+(i===current?" on":"");b.title=`Texture ${i}`+(sp?` (${sp}; the generator skips it)`:"");b.appendChild(thumb(i,56));const s=document.createElement("span");s.textContent=sp?`${i} · ${sp}`:i;if(sp)s.className="sp";b.appendChild(s);
     b.onclick=()=>{closeModal();onPick(i);};grid.appendChild(b);}
   body.appendChild(grid);
+  const nl=withSky?landCount():0;
+  if(nl){const lc=landCol();const h=document.createElement("p");h.className="note";h.style.marginTop="14px";h.textContent=`Landscape (sky): ${LANDSCAPES[lc-LANDSCAPE_COL]}. Picking one sets the surface to show the sky.`;body.appendChild(h);
+    const sg=document.createElement("div");sg.id="texPickSky";sg.style.display="grid";sg.style.gridTemplateColumns="repeat(auto-fill,minmax(64px,1fr))";sg.style.gap="6px";sg.style.marginTop="8px";
+    for(let i=0;i<nl;i++){const b=document.createElement("button");b.className="texbtn"+(curCol===lc&&skyCur===i?" on":"");b.title=`Landscape ${i}`;b.appendChild(thumb(i,56,lc));const s=document.createElement("span");s.textContent=`sky ${i}`;b.appendChild(s);
+      b.onclick=()=>{closeModal();onPick(i,lc);};sg.appendChild(b);}
+    body.appendChild(sg);}
   openModal(title,body,[]);
 }
 function texField(label,id,value,onPick){
@@ -1972,7 +1990,7 @@ function texField(label,id,value,onPick){
   return field(label,b);
 }
 const patternCache=new Map();
-function texPattern(bitmap){if(patternCache.has(bitmap))return patternCache.get(bitmap);const cv=texCanvasFor(bitmap);const p=ctx.createPattern(cv,"repeat");patternCache.set(bitmap,{p,w:cv.width});return patternCache.get(bitmap);}
+function texPattern(bitmap,col,clut){const key=bitmap+":"+(col??"")+":"+(clut|0);if(patternCache.has(key))return patternCache.get(key);const cv=texCanvasFor(bitmap,col,clut|0);const p=ctx.createPattern(cv,"repeat");patternCache.set(key,{p,w:cv.width});return patternCache.get(key);}
 
 // =============================================================== new level dialog
 function openNewLevel(){
@@ -2035,9 +2053,12 @@ function openSurfaceDialog(s,onDone){
   const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="10px";
   const where=document.createElement("p");where.className="note";where.textContent=`${s.kind==="floor"?"Floor":s.kind==="ceil"?"Ceiling":({full:"Wall",upper:"Upper wall",lower:"Lower wall"})[s.part]} of polygon ${doc.polys.indexOf(q)}.`;body.appendChild(where);
   let tex=cur.b;const origTex=cur.b;const tb=document.createElement("button");tb.type="button";tb.className="texpick";
-  const drawTb=()=>{tb.innerHTML="";tb.appendChild(thumb(tex,28));const sp=document.createElement("span");sp.textContent=`Texture ${tex}`;tb.appendChild(sp);};drawTb();
+  const drawTb=()=>{tb.innerHTML="";tb.appendChild(thumb(tex,28,cur.col));const sp=document.createElement("span");sp.textContent=isLandCol(cur.col)?`Landscape ${tex}`:`Texture ${tex}`;tb.appendChild(sp);};drawTb();
+  let picked=false;
   tb.onclick=()=>{
-    openTexturePicker("Texture",tex,v=>{cur.b=v;tex=v;applyAndReopen();});
+    openTexturePicker("Texture",{b:tex,col:cur.col},(v,c)=>{cur.b=v;tex=v;picked=true;delete cur.clut;
+      if(c!=null){cur.col=c;xf.value=String(XFER_LANDSCAPE);}else{delete cur.col;if(+xf.value===XFER_LANDSCAPE)xf.value="0";}
+      applyAndReopen();},true);
     function applyAndReopen(){commit(false);openSurfaceDialog(s,onDone);}};
   body.appendChild(field("Texture",tb));
   const ox=numInput("sfX",((cur.ox||0)/WU).toFixed(3),"0.03125",()=>{});const oy=numInput("sfY",((cur.oy||0)/WU).toFixed(3),"0.03125",()=>{});
@@ -2065,7 +2086,7 @@ function openSurfaceDialog(s,onDone){
   function commit(close){
     pushUndo();
     const t={b:cur.b,ox:Math.round((parseFloat(ox.value)||0)*WU),oy:Math.round((parseFloat(oy.value)||0)*WU)};
-    if(cur.b===origTex){if(cur.col!=null)t.col=cur.col;if(cur.clut)t.clut=cur.clut;}
+    if(picked||cur.b===origTex){if(cur.col!=null)t.col=cur.col;if(cur.clut)t.clut=cur.clut;}
     const x=+xf.value;if(x)t.xfer=x;
     if(useOwn.checked)t.light=clamp(Math.round(parseFloat(lt.value)||0),0,100);
     if(cur.li!=null&&t.light===origLight)t.li=cur.li;
@@ -2170,20 +2191,23 @@ function open3D(){
     if(q.floor-st.feet>STEP)return false;if(q.ceil-Math.max(q.floor,st.feet)<BODY)return false;
     for(const l of doc.lines)if(l.solid&&segIntersect({x:st.x,y:st.y},{x:nx,y:ny},l.a,l.b))return false;
     return true;}
-  const pal=wrap.querySelector("#h3pal");
+  const pal=wrap.querySelector("#h3pal");let paintCol=null; // null paints the wall set; a landscape collection paints sky
   const texCk=wrap.querySelector("#h3applyTex"),lightCk=wrap.querySelector("#h3applyLight"),lightIn=wrap.querySelector("#h3light");
   texCk.checked=paintApply.tex;lightCk.checked=paintApply.light;lightIn.value=paintLight;
   // hand the keyboard back to the 3D view after each change, so Space paints again
-  texCk.onchange=()=>{paintApply.tex=texCk.checked;texCk.blur();};lightCk.onchange=()=>{paintApply.light=lightCk.checked;lightCk.blur();};lightIn.onchange=()=>{paintLight=clamp(Math.round(+lightIn.value||0),0,100);lightIn.value=paintLight;lightCk.checked=paintApply.light=true;lightIn.blur();};
-  function renderPalette(){pal.innerHTML="";const n=texCount();paintTex=clamp(paintTex,0,n-1);for(let i=0;i<n;i++){const b=document.createElement("button");b.className="texbtn"+(i===paintTex?" on":"");b.title=`Texture ${i}`;b.appendChild(thumb(i,52));const s=document.createElement("span");s.textContent=i;b.appendChild(s);b.onclick=()=>{paintTex=i;renderPalette();};pal.appendChild(b);}
+  function renderPalette(){pal.innerHTML="";const n=texCount(),nl=landCount();if(paintCol!=null&&nl)paintCol=landCol();else paintCol=null;paintTex=clamp(paintTex,0,(paintCol!=null?nl:n)-1);for(let i=0;i<n;i++){const b=document.createElement("button");b.className="texbtn"+(paintCol==null&&i===paintTex?" on":"");b.title=`Texture ${i}`;b.appendChild(thumb(i,52));const s=document.createElement("span");s.textContent=i;b.appendChild(s);b.onclick=()=>{paintTex=i;paintCol=null;renderPalette();};pal.appendChild(b);}
+    for(let i=0;i<nl;i++){const lc=landCol(),b=document.createElement("button");b.className="texbtn sky"+(paintCol===lc&&i===paintTex?" on":"");b.title=`Landscape ${i} (sky)`;b.appendChild(thumb(i,52,lc));const s=document.createElement("span");s.textContent=`sky ${i}`;b.appendChild(s);b.onclick=()=>{paintTex=i;paintCol=lc;renderPalette();};pal.appendChild(b);}
     const on=pal.querySelector(".on");if(on)on.scrollIntoView({block:"nearest",inline:"nearest"});}
-  function texOfSurf(s){if(s.kind==="floor")return {b:s.poly.ftex,ox:s.poly.fox,oy:s.poly.foy,light:s.poly.flight};if(s.kind==="ceil")return {b:s.poly.ctex,ox:s.poly.cox,oy:s.poly.coy,light:s.poly.clight};if(s.part==="trans")return (sideGet(s.a,s.b)||{}).trans||{b:0};return wallTex(s.poly,s.a,s.b,s.part);}
+  function texOfSurf(s){if(s.kind==="floor")return {b:s.poly.ftex,col:s.poly.fcol,ox:s.poly.fox,oy:s.poly.foy,light:s.poly.flight};if(s.kind==="ceil")return {b:s.poly.ctex,col:s.poly.ccol,ox:s.poly.cox,oy:s.poly.coy,light:s.poly.clight};if(s.part==="trans")return (sideGet(s.a,s.b)||{}).trans||{b:0};return wallTex(s.poly,s.a,s.b,s.part);}
   const partName={full:"Wall",upper:"Upper wall",lower:"Lower wall",trans:"See-through texture"};
   function describe(s){if(!s)return "Aim at a surface";const t=texOfSurf(s);const where=s.kind==="floor"?"Floor":s.kind==="ceil"?"Ceiling":partName[s.part];
     const pn=s.kind==="wall"&&(sideGet(s.a,s.b)||{}).panel;const pl=pn?panelList(doc.info.env).find(p=>p.type===pn.type):null;
-    return `${where} · polygon ${doc.polys.indexOf(s.poly)} · texture ${t.b} · offset ${((t.ox||0)/WU).toFixed(3)}, ${((t.oy||0)/WU).toFixed(3)} · light ${t.light??s.poly.light}%${pl?" · "+pl.label:""}`;}
-  function applyTex(s,b){if(s.kind==="floor"){s.poly.ftex=b;delete s.poly.fcol;delete s.poly.fclut;}else if(s.kind==="ceil"){s.poly.ctex=b;delete s.poly.ccol;delete s.poly.cclut;}
-    else{const cur=(sideGet(s.a,s.b)||{})[s.part];const t={...(cur||{ox:0,oy:0}),b};delete t.col;delete t.clut;sideSet(s.a,s.b,s.part,t);}}
+    return `${where} · polygon ${doc.polys.indexOf(s.poly)} · ${isLandCol(t.col)?"landscape":"texture"} ${t.b} · offset ${((t.ox||0)/WU).toFixed(3)}, ${((t.oy||0)/WU).toFixed(3)} · light ${t.light??s.poly.light}%${pl?" · "+pl.label:""}`;}
+  // a sky texture also sets the Landscape transfer mode; a wall-set texture takes it off again
+  function applyTex(s,b,col=paintCol){const sky=col!=null,q=s.poly;
+    if(s.kind==="floor"){q.ftex=b;delete q.fclut;if(sky){q.fcol=col;q.fxfer=XFER_LANDSCAPE;}else{delete q.fcol;if(q.fxfer===XFER_LANDSCAPE)q.fxfer=0;}}
+    else if(s.kind==="ceil"){q.ctex=b;delete q.cclut;if(sky){q.ccol=col;q.cxfer=XFER_LANDSCAPE;}else{delete q.ccol;if(q.cxfer===XFER_LANDSCAPE)q.cxfer=0;}}
+    else{const cur=(sideGet(s.a,s.b)||{})[s.part];const t={...(cur||{ox:0,oy:0}),b};delete t.col;delete t.clut;if(sky){t.col=col;t.xfer=XFER_LANDSCAPE;}else if(t.xfer===XFER_LANDSCAPE)delete t.xfer;sideSet(s.a,s.b,s.part,t);}}
   function refresh(){dirty=true;PInow=platformInfo(doc);build();updateAim();lastAim=undefined;}
   function applyLight(s,v){const q=s.poly;
     if(s.kind==="floor"){if(v===q.light&&q.clight==null&&q.fli==null)delete q.flight;else q.flight=v;delete q.fli;}
@@ -2191,13 +2215,13 @@ function open3D(){
     else{const t={...texOfSurf(s)};delete t.li;if(v===q.light&&q.wli==null&&q.fli==null)delete t.light;else t.light=v;sideSet(s.a,s.b,s.part,t);}}
   function paint(all){if(!aim)return;if(!paintApply.tex&&!paintApply.light){status("Tick Apply texture or Apply light first.");return;}pushUndo();const s=aim;
     if(paintApply.tex){
-      if(all){const q=s.poly;if(s.kind==="wall"){q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];for(const part of ["full","upper","lower"]){const cur=(sideGet(a,b)||{})[part];sideSet(a,b,part,{...(cur||{ox:0,oy:0}),b:paintTex});}});q.wtex=paintTex;}else applyTex(s,paintTex);}
+      if(all){const q=s.poly;if(s.kind==="wall"){q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];for(const part of ["full","upper","lower"])applyTex({kind:"wall",poly:q,a,b,part},paintTex);});if(paintCol==null)q.wtex=paintTex;}else applyTex(s,paintTex);}
       else applyTex(s,paintTex);}
     if(paintApply.light){if(all){const q=s.poly;q.light=paintLight;delete q.flight;delete q.clight;clearPolyLightIdx(q);
         q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];const sd=sideGet(a,b);if(sd)for(const part of ["full","upper","lower","trans"])if(sd[part]){delete sd[part].light;delete sd[part].li;}});}
       else applyLight(s,paintLight);}
     refresh();}
-  function grab(){if(!aim)return;const t=texOfSurf(aim);paintTex=t.b;paintLight=t.light??aim.poly.light;renderPalette();lightIn.value=paintLight;status(`Picked up texture ${paintTex} and light ${paintLight}%.`);}
+  function grab(){if(!aim)return;const t=texOfSurf(aim);paintTex=t.b;paintCol=isLandCol(t.col)?t.col:null;paintLight=t.light??aim.poly.light;renderPalette();lightIn.value=paintLight;status(`Picked up ${paintCol!=null?"landscape":"texture"} ${paintTex} and light ${paintLight}%.`);}
   function nudge(dx,dy){if(!aim)return;const s=aim;pushUndo();
     if(s.kind==="floor"){s.poly.fox=(s.poly.fox||0)+dx;s.poly.foy=(s.poly.foy||0)+dy;}
     else if(s.kind==="ceil"){s.poly.cox=(s.poly.cox||0)+dx;s.poly.coy=(s.poly.coy||0)+dy;}
@@ -2219,7 +2243,7 @@ function open3D(){
     if(k===" "){e.preventDefault();if(!e.repeat)paint(e.shiftKey);return;}
     if(k==="f"){setFly(!fly);return;}if(k==="p"||k==="tab"){e.preventDefault();setPalette(!paletteShown);return;}
     if(k==="g"){grab();return;}if(k==="o"){wrap.querySelector("#h3doors").click();return;}
-    if(k==="["||k==="]"){paintTex=clamp(paintTex+(k==="]"?1:-1),0,texCount()-1);renderPalette();return;}
+    if(k==="["||k==="]"){paintTex=clamp(paintTex+(k==="]"?1:-1),0,(paintCol!=null?landCount():texCount())-1);renderPalette();return;}
     if(aim){const step=e.shiftKey?128:32;
       if(k==="j"){nudge(-step,0);return;}if(k==="l"){nudge(step,0);return;}if(k==="i"){nudge(0,-step);return;}if(k==="k"){nudge(0,step);return;}
       if(k==="="||k==="+"||k==="-"){pushUndo();const d=k==="-"?-5:5;const q=aim.poly;
@@ -3024,7 +3048,7 @@ status(legacy?"Restored your last level.":"Loaded the sample level “Cistern”
 (async()=>{try{const s=await idb.get("scenario");if(s){loadScenarioObject(JSON.parse(s));afterLoad(`Restored “${scenario.name}” (${scenario.levels.length} level${scenario.levels.length>1?"s":""}).`);fitView();}}catch(e){}})();
 restoreShapes().then(()=>{refreshShapesUI();let seen=false;try{seen=!!localStorage.getItem("forge-remake-setup");}catch(e){}if(!seen&&!GAME_IDS.some(g=>shapeStore[g])&&$("modal").hidden)openShapesDialog(true);});
 requestAnimationFrame(()=>{resize();fitView();});
-window.__forge={scenario,switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,shapeStore,texCount,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,newDoc,setDoc:d=>{doc=d;changed();}};
+window.__forge={scenario,switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,newDoc,setDoc:d=>{doc=d;changed();}};
 Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
   screenOf(x,y){const r=canvas.getBoundingClientRect();const [sx,sy]=toS(x,y);return {x:r.left+sx,y:r.top+sy};},centroid,fitView});
 Object.defineProperty(window.__forge,"vpaint",{get:()=>vpaint});
