@@ -266,9 +266,9 @@ test("spawn table edits reach the exported map", async () => {
   assert.equal(r[1], placed); assert.equal(r[3], 4); assert.equal(r[4], -1); assert.equal(Math.round(((r[5] & 0xffff) * 100) / 65535), 40);
 });
 
-// A tiny made-up Shapes file: a Water wall set (collection 17) with 3 textures and a Daytime landscape (collection 27) with 2.
+// A tiny made-up Shapes file: a Water wall set (collection 17) with 3 textures, a Lava set (18) with 2, and a Daytime landscape (collection 27) with 2.
 function tinyShapes() {
-  const sets = { 17: { type: 1, n: 3, w: 4, h: 4 }, 27: { type: 4, n: 2, w: 8, h: 4 } };
+  const sets = { 17: { type: 1, n: 3, w: 4, h: 4 }, 18: { type: 1, n: 2, w: 4, h: 4 }, 27: { type: 4, n: 2, w: 8, h: 4 } };
   const blobs = {};
   for (const [ci, c] of Object.entries(sets)) {
     const bmSize = 26 + (c.h + 1) * 4 + c.w * c.h;
@@ -303,11 +303,12 @@ test("landscape (sky) textures show in the texture picker and paint as sky", asy
   }, tinyShapes());
   assert.deepEqual(await page.evaluate(() => [window.__forge.texCount(), window.__forge.landCount(), window.__forge.landCol()]), [3, 2, 27]);
 
-  // the surface dialog's picker lists the sky textures after the wall set
+  // the surface dialog's picker offers the sky in its Set menu
   await page.evaluate(() => { const f = window.__forge; f.openSurfaceDialog({ kind: "ceil", poly: f.doc.polys[0] }); });
   await page.locator("#dialog .texpick").first().click();
-  assert.equal(await page.locator("#texPickSky .texbtn").count(), 2);
-  await page.locator("#texPickSky .texbtn").nth(1).click();
+  await page.selectOption("#texSet", "27");
+  assert.equal(await page.locator("#texPickGrid .texbtn").count(), 2);
+  await page.locator("#texPickGrid .texbtn").nth(1).click();
   assert.equal(await page.locator("#sfXfer").inputValue(), "9", "picking a sky texture sets Landscape mode");
   await page.locator("#dialog button", { hasText: "Apply" }).click();
   const q = await page.evaluate(() => { const q = window.__forge.doc.polys[0]; return { ctex: q.ctex, ccol: q.ccol, cxfer: q.cxfer }; });
@@ -325,11 +326,47 @@ test("landscape (sky) textures show in the texture picker and paint as sky", asy
   // picking a wall texture again takes the sky off
   await page.evaluate(() => { const f = window.__forge; f.openSurfaceDialog({ kind: "ceil", poly: f.doc.polys[0] }); });
   await page.locator("#dialog .texpick").first().click();
-  await page.locator("#dialog .texbtn").nth(2).click();
+  assert.equal(await page.inputValue("#texSet"), "27", "the picker opens on the surface's own set");
+  await page.selectOption("#texSet", "");
+  await page.locator("#texPickGrid .texbtn").nth(2).click();
   assert.equal(await page.locator("#sfXfer").inputValue(), "0");
   await page.locator("#dialog button", { hasText: "Apply" }).click();
   assert.deepEqual(await page.evaluate(() => { const q = window.__forge.doc.polys[0]; return [q.ctex, q.ccol ?? null, q.cxfer]; }), [2, null, 0]);
 
+  await page.evaluate(() => window.__forge.removeShapes("inf"));
+  assert.deepEqual(errors, []);
+});
+
+test("any texture set can be used on any level, and it survives export", async () => {
+  const { page, errors } = app;
+  await page.evaluate(async (bytes) => {
+    const f = window.__forge;
+    f.setDoc(f.newDoc("inf"));
+    f.applySpec(f.sampleSpec(), false, "test");
+    f.doc.info.env = 0;
+    await f.installShapes("inf", "tiny", new Uint8Array(bytes).buffer, false);
+  }, tinyShapes());
+  // the Set menu lists this level's set first, then the other wall sets in the Shapes file
+  await page.evaluate(() => { const f = window.__forge; f.openSurfaceDialog({ kind: "floor", poly: f.doc.polys[0] }); });
+  await page.locator("#dialog .texpick").first().click();
+  const opts = await page.$$eval("#texSet option", (os) => os.map((o) => [o.value, o.textContent]));
+  assert.deepEqual(opts.map((o) => o[0]), ["", "18"]);
+  assert.match(opts[0][1], /this level/);
+  await page.selectOption("#texSet", "18");
+  assert.equal(await page.locator("#texPickGrid .texbtn").count(), 2);
+  await page.locator("#texPickGrid .texbtn").nth(1).click();
+  assert.equal(await page.locator("#sfXfer").inputValue(), "0", "another wall set is not sky");
+  await page.locator("#dialog button", { hasText: "Apply" }).click();
+  const q = await page.evaluate(() => { const q = window.__forge.doc.polys[0]; return { ftex: q.ftex, fcol: q.fcol, fxfer: q.fxfer }; });
+  assert.deepEqual(q, { ftex: 1, fcol: 18, fxfer: 0 });
+  // the floor exports with the Lava collection and comes back the same; the level's own set is stored without one
+  const back = await page.evaluate(() => {
+    const f = window.__forge;
+    const a = f.buildWadFile(f.buildMapChunks(f.doc).chunks, "Test", 1);
+    const d = f.levelToDoc(f.parseWad(a.buffer.slice(0)).levels[0]).doc;
+    return { ftex: d.polys[0].ftex, fcol: d.polys[0].fcol, other: d.polys[1].fcol ?? null };
+  });
+  assert.deepEqual(back, { ftex: 1, fcol: 18, other: null });
   await page.evaluate(() => window.__forge.removeShapes("inf"));
   assert.deepEqual(errors, []);
 });

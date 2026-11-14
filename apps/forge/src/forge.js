@@ -1466,9 +1466,12 @@ function renderPane(){
     else{const gd=group();gd.appendChild(button("Make it a door or lift",()=>{pushUndo();items.forEach(q=>{q.type=5;q.plat=PLAT_DEFAULT();});changed();}));p.appendChild(gd);}
     liquidSection(items,one,p);
     const g3=group("Textures · "+envName(doc.info.game,doc.info.env));
-    g3.appendChild(texField("Floor","pFt",one.ftex,v=>all(q=>q.ftex=v)));
-    g3.appendChild(texField("Ceiling","pCt",one.ctex,v=>all(q=>q.ctex=v)));
-    g3.appendChild(texField("Walls","pWt",one.wtex,v=>all(q=>q.wtex=v)));
+    // another set's texture is stored with its collection; walls then get it on every side (the polygon default can't hold a set)
+    const setFC=(q,k,v,c)=>{q[k+"tex"]=v;delete q[k+"clut"];if(c!=null)q[k+"col"]=c;else delete q[k+"col"];if(q[k+"xfer"]===XFER_LANDSCAPE)q[k+"xfer"]=0;};
+    g3.appendChild(texField("Floor","pFt",one.ftex,(v,c)=>all(q=>setFC(q,"f",v,c)),one.fcol));
+    g3.appendChild(texField("Ceiling","pCt",one.ctex,(v,c)=>all(q=>setFC(q,"c",v,c)),one.ccol));
+    g3.appendChild(texField("Walls","pWt",one.wtex,(v,c)=>all(q=>{if(c==null){q.wtex=v;return;}
+      q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];for(const part of ["full","upper","lower"]){const cur=(sideGet(a,b)||{})[part];const t={...(cur||{ox:0,oy:0}),b:v,col:c};delete t.clut;if(t.xfer===XFER_LANDSCAPE)delete t.xfer;sideSet(a,b,part,t);}});})));
     const painted=items.reduce((n,q)=>n+q.verts.filter((v,k)=>sideGet(v,q.verts[(k+1)%q.verts.length])).length,0);
     const tn=document.createElement("p");tn.className="note";tn.textContent=(realTextures()?"":"Load your Shapes file to see the real textures. ")+(painted?`${painted} wall${painted>1?"s were":" was"} painted in 3D and keep${painted>1?"":"s"} its own texture.`:"Paint individual walls in the 3D view (P).");g3.appendChild(tn);
     const tr=document.createElement("div");tr.className="row";
@@ -1911,7 +1914,16 @@ function proceduralTex(bitmap,envIdx){
 }
 // texture for the current level: real if a Shapes file is loaded, otherwise a numbered stand-in
 function texCanvasFor(bitmap,col,clut){const s=shapesFor(doc.info.game);if(s){const cv=shapeCanvas(s.game,col??(17+doc.info.env),bitmap,clut|0);if(cv)return cv;}if(isLandCol(col))return skyStandIn(col);return proceduralTex(bitmap+(col!=null?1000*col:0),doc.info.env);}
-function texCount(){const s=shapesFor(doc.info.game);if(s){const c=s.st.parsed.cols[17+doc.info.env];if(c){try{return decodeCollection(c).count;}catch(e){}}}return 30;}
+function texCount(){return texCountFor(null);}
+// textures in any wall set (collection 17-21) or landscape; null means the level's own wall set
+function texCountFor(col){if(isLandCol(col))return col===landCol()?landCount():(()=>{const s=shapesFor(doc.info.game);if(s){const c=s.st.parsed.cols[col];if(c){try{const d=decodeCollection(c);return d.ll.length||d.bmOffs.length;}catch(e){}}return 0;}return 1;})();
+  const s=shapesFor(doc.info.game);if(s){const c=s.st.parsed.cols[col??(17+doc.info.env)];if(c){try{return decodeCollection(c).count;}catch(e){}}return col==null?30:0;}return 30;}
+// Any surface may use any wall set: Aleph One loads every collection a level's surfaces use (map.cpp, mark_map_collections).
+// The level's own set is stored as "no collection", so Bungie's maps still save byte-identical.
+const ownCol=c=>(c==null||c===17+doc.info.env)?null:c;
+function texSets(withSky){const out=envOptions(doc.info.game).map(([e,name])=>({col:e===doc.info.env?null:17+e,name:e===doc.info.env?`${name} (this level)`:name}));
+  out.sort((a,b)=>(a.col==null?-1:0)-(b.col==null?-1:0));if(withSky&&landCount())out.push({col:landCol(),name:`Sky: ${LANDSCAPES[landCol()-LANDSCAPE_COL]}`});return out;}
+function setName(col){if(col==null)return "";if(isLandCol(col))return "landscape";return envName(doc.info.game,col-17)+" ";}
 function landCol(){return LANDSCAPE_COL+clamp(doc.info.landscape|0,0,3);}
 // how many sky textures the level's landscape has: 0 when the Shapes file has none (Marathon 1), 1 stand-in without Shapes
 function landCount(){const s=shapesFor(doc.info.game);if(s){const c=s.st.parsed.cols[landCol()];if(c){try{const d=decodeCollection(c);return d.ll.length||d.bmOffs.length;}catch(e){}}return 0;}return doc.info.game==="m1"?0:1;}
@@ -1965,28 +1977,28 @@ function openShapesDialog(first){
 }
 // texture picker (grid of thumbnails)
 function thumb(bitmap,size=40,col){const c=document.createElement("canvas");c.width=c.height=size;const g=c.getContext("2d");g.imageSmoothingEnabled=false;const src=texCanvasFor(bitmap,col);g.drawImage(src,0,0,size,size);return c;}
-// current is a texture number, or {b,col} for a surface; withSky adds the level's landscape textures (onPick gets their collection)
+// current is a texture number, or {b,col} for a surface. The Set menu lists every wall set in the game's Shapes
+// (and the level's landscape when withSky); onPick(texture, collection) gets null for the level's own set.
 function openTexturePicker(title,current,onPick,withSky){
   const body=document.createElement("div");
-  const curCol=current&&typeof current==="object"?current.col:null;const skyCur=current&&typeof current==="object"?current.b:null;if(current&&typeof current==="object")current=isLandCol(curCol)?-1:current.b;
-  const n=texCount();
-  const note=document.createElement("p");note.className="note";note.textContent=realTextures()?`${n} textures in the ${ENVS[doc.info.env].name} set of ${GAMES[shapesFor(doc.info.game).game].short}.`:"Showing numbered stand-ins. Load your Shapes file to see the real textures.";
-  body.appendChild(note);
-  const grid=document.createElement("div");grid.style.display="grid";grid.style.gridTemplateColumns="repeat(auto-fill,minmax(64px,1fr))";grid.style.gap="6px";grid.style.marginTop="8px";
-  for(let i=0;i<n;i++){const sp=texSpecial(i);const b=document.createElement("button");b.className="texbtn"+(i===current?" on":"");b.title=`Texture ${i}`+(sp?` (${sp}; the generator skips it)`:"");b.appendChild(thumb(i,56));const s=document.createElement("span");s.textContent=sp?`${i} · ${sp}`:i;if(sp)s.className="sp";b.appendChild(s);
-    b.onclick=()=>{closeModal();onPick(i);};grid.appendChild(b);}
-  body.appendChild(grid);
-  const nl=withSky?landCount():0;
-  if(nl){const lc=landCol();const h=document.createElement("p");h.className="note";h.style.marginTop="14px";h.textContent=`Landscape (sky): ${LANDSCAPES[lc-LANDSCAPE_COL]}. Picking one sets the surface to show the sky.`;body.appendChild(h);
-    const sg=document.createElement("div");sg.id="texPickSky";sg.style.display="grid";sg.style.gridTemplateColumns="repeat(auto-fill,minmax(64px,1fr))";sg.style.gap="6px";sg.style.marginTop="8px";
-    for(let i=0;i<nl;i++){const b=document.createElement("button");b.className="texbtn"+(curCol===lc&&skyCur===i?" on":"");b.title=`Landscape ${i}`;b.appendChild(thumb(i,56,lc));const s=document.createElement("span");s.textContent=`sky ${i}`;b.appendChild(s);
-      b.onclick=()=>{closeModal();onPick(i,lc);};sg.appendChild(b);}
-    body.appendChild(sg);}
-  openModal(title,body,[]);
+  let curCol=null,curB=current;if(current&&typeof current==="object"){curCol=ownCol(current.col);curB=current.b;}
+  const sets=texSets(withSky);let set=sets.some(x=>x.col===curCol)?curCol:null;
+  const top=document.createElement("div");top.className="row";top.style.alignItems="center";
+  const selSet=sel_("texSet",sets.map(x=>[x.col==null?"":String(x.col),x.name]),set==null?"":String(set),v=>{set=v===""?null:+v;render();});
+  top.appendChild(field("Set",selSet));body.appendChild(top);
+  const note=document.createElement("p");note.className="note";body.appendChild(note);
+  const grid=document.createElement("div");grid.id="texPickGrid";grid.style.display="grid";grid.style.gridTemplateColumns="repeat(auto-fill,minmax(64px,1fr))";grid.style.gap="6px";grid.style.marginTop="8px";body.appendChild(grid);
+  function render(){grid.innerHTML="";const n=texCountFor(set),sky=isLandCol(set),own=set==null;
+    note.textContent=!realTextures()?"Showing numbered stand-ins. Load your Shapes file to see the real textures.":sky?"Picking one sets the surface to show the sky.":own?`${n} textures in this level's set.`:`${n} textures from another set. Aleph One loads them along with the level's own set.`;
+    for(let i=0;i<n;i++){const sp=own?texSpecial(i):null;const b=document.createElement("button");b.className="texbtn"+(i===curB&&set===curCol?" on":"");b.title=(sky?`Landscape ${i}`:`Texture ${i}`)+(sp?` (${sp}; the generator skips it)`:"");
+      b.appendChild(thumb(i,56,set??undefined));const t=document.createElement("span");t.textContent=sky?`sky ${i}`:sp?`${i} · ${sp}`:i;if(sp)t.className="sp";b.appendChild(t);
+      b.onclick=()=>{closeModal();onPick(i,set);};grid.appendChild(b);}
+    const on=grid.querySelector(".on");if(on)setTimeout(()=>on.scrollIntoView({block:"nearest"}),0);}
+  render();openModal(title,body,[]);
 }
-function texField(label,id,value,onPick){
-  const b=document.createElement("button");b.className="texpick";b.id=id;b.type="button";b.appendChild(thumb(value,28));const s=document.createElement("span");s.textContent=`Texture ${value}`;b.appendChild(s);
-  b.onclick=()=>openTexturePicker(label,value,v=>{pushUndo();onPick(v);changed();});
+function texField(label,id,value,onPick,col){
+  col=ownCol(col);const b=document.createElement("button");b.className="texpick";b.id=id;b.type="button";b.appendChild(thumb(value,28,col??undefined));const s=document.createElement("span");s.textContent=col!=null?`${setName(col)}${value}`:`Texture ${value}`;b.appendChild(s);
+  b.onclick=()=>openTexturePicker(label,{b:value,col},(v,c)=>{pushUndo();onPick(v,c);changed();});
   return field(label,b);
 }
 const patternCache=new Map();
@@ -2053,11 +2065,12 @@ function openSurfaceDialog(s,onDone){
   const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="10px";
   const where=document.createElement("p");where.className="note";where.textContent=`${s.kind==="floor"?"Floor":s.kind==="ceil"?"Ceiling":({full:"Wall",upper:"Upper wall",lower:"Lower wall"})[s.part]} of polygon ${doc.polys.indexOf(q)}.`;body.appendChild(where);
   let tex=cur.b;const origTex=cur.b;const tb=document.createElement("button");tb.type="button";tb.className="texpick";
-  const drawTb=()=>{tb.innerHTML="";tb.appendChild(thumb(tex,28,cur.col));const sp=document.createElement("span");sp.textContent=isLandCol(cur.col)?`Landscape ${tex}`:`Texture ${tex}`;tb.appendChild(sp);};drawTb();
+  const drawTb=()=>{tb.innerHTML="";tb.appendChild(thumb(tex,28,cur.col));const sp=document.createElement("span");sp.textContent=isLandCol(cur.col)?`Landscape ${tex}`:ownCol(cur.col)!=null?`${setName(cur.col)}${tex}`:`Texture ${tex}`;tb.appendChild(sp);};drawTb();
   let picked=false;
   tb.onclick=()=>{
     openTexturePicker("Texture",{b:tex,col:cur.col},(v,c)=>{cur.b=v;tex=v;picked=true;delete cur.clut;
-      if(c!=null){cur.col=c;xf.value=String(XFER_LANDSCAPE);}else{delete cur.col;if(+xf.value===XFER_LANDSCAPE)xf.value="0";}
+      if(c!=null)cur.col=c;else delete cur.col;
+      if(isLandCol(c))xf.value=String(XFER_LANDSCAPE);else if(+xf.value===XFER_LANDSCAPE)xf.value="0";
       applyAndReopen();},true);
     function applyAndReopen(){commit(false);openSurfaceDialog(s,onDone);}};
   body.appendChild(field("Texture",tb));
@@ -2118,8 +2131,8 @@ function open3D(){
     <div class="help" id="h3help"></div></div>
   <div class="crosshair" id="h3cross"></div>
   <div class="paintbar" id="h3bar">
-    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Space paints · Shift+Space paints the whole room · G or Alt-click picks up texture and light · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
-      <span class="paintopts"><label><input type="checkbox" id="h3applyTex"> Apply texture</label><label><input type="checkbox" id="h3applyLight"> Apply light</label><label>Light <input type="number" id="h3light" min="0" max="100" step="5"> %</label></span></div>
+    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Click or Space paints · Shift+Space paints the whole room · drag a surface to slide its texture · Shift+drag a floor or ceiling to raise or lower it · G or Alt-click picks up · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
+      <span class="paintopts"><label>Set <select id="h3set"></select></label><label><input type="checkbox" id="h3applyTex"> Apply texture</label><label><input type="checkbox" id="h3applyLight"> Apply light</label><label>Light <input type="number" id="h3light" min="0" max="100" step="5"> %</label></span></div>
     <div class="palette" id="h3pal"></div></div>
   <div class="pad" id="h3pad"><button data-a="paint" aria-label="Paint">Paint</button><button data-k="f" aria-label="Forward">▲</button><button data-a="edit" aria-label="Edit surface">Edit</button><button data-k="l" aria-label="Turn left">◀</button><button data-k="b" aria-label="Back">▼</button><button data-k="r" aria-label="Turn right">▶</button></div>`;
   document.body.appendChild(wrap);
@@ -2177,6 +2190,9 @@ function open3D(){
   build();
   const hlGeo=new THREE.BufferGeometry();const hl=new THREE.LineLoop(hlGeo,new THREE.LineBasicMaterial({color:0xffb040,depthTest:false}));hl.renderOrder=10;hl.visible=false;scene.add(hl);disposables.push(hlGeo,hl.material);
   const ray=new THREE.Raycaster();let aim=null;const center=new THREE.Vector2(0,0);
+  // the surface (and distance) under a screen point; center of the screen when no event is given
+  function surfAt(e){const p=new THREE.Vector2(0,0);if(e){const r=cv.getBoundingClientRect();p.set(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1);}
+    ray.setFromCamera(p,camera);const hit=ray.intersectObjects(meshes,false)[0];const sf=hit?surfOf.get(hit.object)[hit.faceIndex]:null;return sf&&sf.kind!=="media"?{sf,dist:hit.distance}:null;}
   function updateAim(){ray.setFromCamera(center,camera);const hit=ray.intersectObjects(meshes,false)[0];
     aim=hit?surfOf.get(hit.object)[hit.faceIndex]:null;if(aim&&aim.kind==="media")aim=null;
     if(aim){hlGeo.setAttribute("position",new THREE.Float32BufferAttribute(aim.corners.flat(),3));hl.visible=paletteShown;}else hl.visible=false;}
@@ -2195,19 +2211,24 @@ function open3D(){
   const texCk=wrap.querySelector("#h3applyTex"),lightCk=wrap.querySelector("#h3applyLight"),lightIn=wrap.querySelector("#h3light");
   texCk.checked=paintApply.tex;lightCk.checked=paintApply.light;lightIn.value=paintLight;
   // hand the keyboard back to the 3D view after each change, so Space paints again
-  function renderPalette(){pal.innerHTML="";const n=texCount(),nl=landCount();if(paintCol!=null&&nl)paintCol=landCol();else paintCol=null;paintTex=clamp(paintTex,0,(paintCol!=null?nl:n)-1);for(let i=0;i<n;i++){const b=document.createElement("button");b.className="texbtn"+(paintCol==null&&i===paintTex?" on":"");b.title=`Texture ${i}`;b.appendChild(thumb(i,52));const s=document.createElement("span");s.textContent=i;b.appendChild(s);b.onclick=()=>{paintTex=i;paintCol=null;renderPalette();};pal.appendChild(b);}
-    for(let i=0;i<nl;i++){const lc=landCol(),b=document.createElement("button");b.className="texbtn sky"+(paintCol===lc&&i===paintTex?" on":"");b.title=`Landscape ${i} (sky)`;b.appendChild(thumb(i,52,lc));const s=document.createElement("span");s.textContent=`sky ${i}`;b.appendChild(s);b.onclick=()=>{paintTex=i;paintCol=lc;renderPalette();};pal.appendChild(b);}
+  // the Set menu picks which texture set the palette shows: the level's own (null), any other wall set, or the sky
+  const setSel=wrap.querySelector("#h3set");
+  function renderSets(){const sets=texSets(true);if(!sets.some(x=>x.col===paintCol))paintCol=null;setSel.innerHTML="";
+    for(const x of sets){const o=document.createElement("option");o.value=x.col==null?"":String(x.col);o.textContent=x.name;setSel.appendChild(o);}setSel.value=paintCol==null?"":String(paintCol);}
+  setSel.onchange=()=>{paintCol=setSel.value===""?null:+setSel.value;paintTex=0;renderPalette();setSel.blur();};
+  function renderPalette(){renderSets();pal.innerHTML="";const n=texCountFor(paintCol),sky=isLandCol(paintCol);paintTex=clamp(paintTex,0,Math.max(0,n-1));
+    for(let i=0;i<n;i++){const b=document.createElement("button");b.className="texbtn"+(sky?" sky":"")+(i===paintTex?" on":"");b.title=sky?`Landscape ${i} (sky)`:`Texture ${i}`;b.appendChild(thumb(i,52,paintCol??undefined));const t=document.createElement("span");t.textContent=sky?`sky ${i}`:i;b.appendChild(t);b.onclick=()=>{paintTex=i;renderPalette();};pal.appendChild(b);}
     const on=pal.querySelector(".on");if(on)on.scrollIntoView({block:"nearest",inline:"nearest"});}
   function texOfSurf(s){if(s.kind==="floor")return {b:s.poly.ftex,col:s.poly.fcol,ox:s.poly.fox,oy:s.poly.foy,light:s.poly.flight};if(s.kind==="ceil")return {b:s.poly.ctex,col:s.poly.ccol,ox:s.poly.cox,oy:s.poly.coy,light:s.poly.clight};if(s.part==="trans")return (sideGet(s.a,s.b)||{}).trans||{b:0};return wallTex(s.poly,s.a,s.b,s.part);}
   const partName={full:"Wall",upper:"Upper wall",lower:"Lower wall",trans:"See-through texture"};
   function describe(s){if(!s)return "Aim at a surface";const t=texOfSurf(s);const where=s.kind==="floor"?"Floor":s.kind==="ceil"?"Ceiling":partName[s.part];
     const pn=s.kind==="wall"&&(sideGet(s.a,s.b)||{}).panel;const pl=pn?panelList(doc.info.env).find(p=>p.type===pn.type):null;
-    return `${where} · polygon ${doc.polys.indexOf(s.poly)} · ${isLandCol(t.col)?"landscape":"texture"} ${t.b} · offset ${((t.ox||0)/WU).toFixed(3)}, ${((t.oy||0)/WU).toFixed(3)} · light ${t.light??s.poly.light}%${pl?" · "+pl.label:""}`;}
-  // a sky texture also sets the Landscape transfer mode; a wall-set texture takes it off again
-  function applyTex(s,b,col=paintCol){const sky=col!=null,q=s.poly;
-    if(s.kind==="floor"){q.ftex=b;delete q.fclut;if(sky){q.fcol=col;q.fxfer=XFER_LANDSCAPE;}else{delete q.fcol;if(q.fxfer===XFER_LANDSCAPE)q.fxfer=0;}}
-    else if(s.kind==="ceil"){q.ctex=b;delete q.cclut;if(sky){q.ccol=col;q.cxfer=XFER_LANDSCAPE;}else{delete q.ccol;if(q.cxfer===XFER_LANDSCAPE)q.cxfer=0;}}
-    else{const cur=(sideGet(s.a,s.b)||{})[s.part];const t={...(cur||{ox:0,oy:0}),b};delete t.col;delete t.clut;if(sky){t.col=col;t.xfer=XFER_LANDSCAPE;}else if(t.xfer===XFER_LANDSCAPE)delete t.xfer;sideSet(s.a,s.b,s.part,t);}}
+    return `${where} · polygon ${doc.polys.indexOf(s.poly)} · ${isLandCol(t.col)?"landscape":(ownCol(t.col)!=null?setName(t.col):"")+"texture"} ${t.b} · height ${s.kind==="floor"?fmt(s.poly.floor):s.kind==="ceil"?fmt(s.poly.ceil):"–"} · offset ${((t.ox||0)/WU).toFixed(3)}, ${((t.oy||0)/WU).toFixed(3)} · light ${t.light??s.poly.light}%${pl?" · "+pl.label:""}`;}
+  // the texture keeps its set (collection; null = the level's own). A sky texture also sets the Landscape mode; anything else takes it off
+  function applyTex(s,b,col=paintCol){col=ownCol(col);const sky=isLandCol(col),q=s.poly;
+    if(s.kind==="floor"){q.ftex=b;delete q.fclut;if(col!=null)q.fcol=col;else delete q.fcol;if(sky)q.fxfer=XFER_LANDSCAPE;else if(q.fxfer===XFER_LANDSCAPE)q.fxfer=0;}
+    else if(s.kind==="ceil"){q.ctex=b;delete q.cclut;if(col!=null)q.ccol=col;else delete q.ccol;if(sky)q.cxfer=XFER_LANDSCAPE;else if(q.cxfer===XFER_LANDSCAPE)q.cxfer=0;}
+    else{const cur=(sideGet(s.a,s.b)||{})[s.part];const t={...(cur||{ox:0,oy:0}),b};delete t.col;delete t.clut;if(col!=null)t.col=col;if(sky)t.xfer=XFER_LANDSCAPE;else if(t.xfer===XFER_LANDSCAPE)delete t.xfer;sideSet(s.a,s.b,s.part,t);}}
   function refresh(){dirty=true;PInow=platformInfo(doc);build();updateAim();lastAim=undefined;}
   function applyLight(s,v){const q=s.poly;
     if(s.kind==="floor"){if(v===q.light&&q.clight==null&&q.fli==null)delete q.flight;else q.flight=v;delete q.fli;}
@@ -2221,7 +2242,7 @@ function open3D(){
         q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];const sd=sideGet(a,b);if(sd)for(const part of ["full","upper","lower","trans"])if(sd[part]){delete sd[part].light;delete sd[part].li;}});}
       else applyLight(s,paintLight);}
     refresh();}
-  function grab(){if(!aim)return;const t=texOfSurf(aim);paintTex=t.b;paintCol=isLandCol(t.col)?t.col:null;paintLight=t.light??aim.poly.light;renderPalette();lightIn.value=paintLight;status(`Picked up ${paintCol!=null?"landscape":"texture"} ${paintTex} and light ${paintLight}%.`);}
+  function grab(){if(!aim)return;const t=texOfSurf(aim);paintTex=t.b;paintCol=ownCol(t.col);paintLight=t.light??aim.poly.light;renderPalette();lightIn.value=paintLight;status(`Picked up ${isLandCol(paintCol)?"landscape":(paintCol!=null?setName(paintCol):"")+"texture"} ${paintTex} and light ${paintLight}%.`);}
   function nudge(dx,dy){if(!aim)return;const s=aim;pushUndo();
     if(s.kind==="floor"){s.poly.fox=(s.poly.fox||0)+dx;s.poly.foy=(s.poly.foy||0)+dy;}
     else if(s.kind==="ceil"){s.poly.cox=(s.poly.cox||0)+dx;s.poly.coy=(s.poly.coy||0)+dy;}
@@ -2233,7 +2254,7 @@ function open3D(){
   function setFly(v){fly=v;wrap.querySelector("#h3fly").classList.toggle("on",v);status(v?"Flying: walls don't stop you. R rises, C sinks.":"Walking.");}
   function setPalette(v){paletteShown=v;wrap.querySelector("#h3bar").hidden=!v;wrap.querySelector("#h3palbtn").classList.toggle("on",v);
     wrap.querySelector("#h3pad").style.bottom=v?"calc(150px + env(safe-area-inset-bottom,0px))":"";if(v)renderPalette();updateAim();}
-  wrap.querySelector("#h3help").textContent="WASD / arrows move · click to look with the mouse (Esc frees it) · Shift runs · F flies · P palette · Esc closes";
+  wrap.querySelector("#h3help").textContent="WASD / arrows move · click to look with the mouse (Esc frees it) · Shift runs · F flies · P paint mode (drag surfaces to slide textures) · Esc closes";
   const shBtn=wrap.querySelector("#h3shapes");shBtn.hidden=realTextures();shBtn.onclick=()=>{try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}openShapesDialog(false);};
   const onShapes=()=>{mats.forEach(m=>{m.map.dispose();m.dispose();});mats.clear();build();shBtn.hidden=realTextures();if(paletteShown)renderPalette();};
   window.addEventListener("forge-shapes",onShapes);
@@ -2243,7 +2264,7 @@ function open3D(){
     if(k===" "){e.preventDefault();if(!e.repeat)paint(e.shiftKey);return;}
     if(k==="f"){setFly(!fly);return;}if(k==="p"||k==="tab"){e.preventDefault();setPalette(!paletteShown);return;}
     if(k==="g"){grab();return;}if(k==="o"){wrap.querySelector("#h3doors").click();return;}
-    if(k==="["||k==="]"){paintTex=clamp(paintTex+(k==="]"?1:-1),0,(paintCol!=null?landCount():texCount())-1);renderPalette();return;}
+    if(k==="["||k==="]"){paintTex=clamp(paintTex+(k==="]"?1:-1),0,Math.max(0,texCountFor(paintCol)-1));renderPalette();return;}
     if(aim){const step=e.shiftKey?128:32;
       if(k==="j"){nudge(-step,0);return;}if(k==="l"){nudge(step,0);return;}if(k==="i"){nudge(0,-step);return;}if(k==="k"){nudge(0,step);return;}
       if(k==="="||k==="+"||k==="-"){pushUndo();const d=k==="-"?-5:5;const q=aim.poly;
@@ -2254,18 +2275,42 @@ function open3D(){
     if(["w","a","s","d","arrowup","arrowdown","arrowleft","arrowright","q","e","shift","r","c"].includes(k)){keys.add(k);e.preventDefault();}};
   const offKey=e=>{keys.delete(e.key.toLowerCase());if(e.key==="Shift")keys.delete("shift");};
   document.addEventListener("keydown",onKey,true);document.addEventListener("keyup",offKey);
-  let look=null;
+  let look=null,drag=null,dragDirty=false;
+  // Dragging in Paint mode, like Forge's visual mode: drag a surface to slide its texture; Shift+drag a floor or ceiling
+  // to raise or lower it. A click without moving still paints. With the mouse locked, the surface under the crosshair moves.
+  function startDrag(e,locked){const hit=surfAt(locked?null:e);if(!hit)return null;const sf=hit.sf,q=sf.poly;
+    // world units per screen pixel at the surface's distance
+    const wpp=2*hit.dist*Math.tan(camera.fov*Math.PI/360)/cv.clientHeight*WU;
+    const d={sf,wpp,shift:e.shiftKey,moved:0,undo:false,sx:e.clientX,sy:e.clientY,yaw:st.yaw};
+    if(d.shift&&(sf.kind==="floor"||sf.kind==="ceil"))d.h0=sf.kind==="floor"?q.floor:q.ceil;
+    else{const t=texOfSurf(sf);d.ox0=sf.kind==="floor"?q.fox||0:sf.kind==="ceil"?q.cox||0:t.ox||0;d.oy0=sf.kind==="floor"?q.foy||0:sf.kind==="ceil"?q.coy||0:t.oy||0;
+      if(sf.kind==="wall"){const rx=-Math.sin(st.yaw),ry=Math.cos(st.yaw),wx=sf.b.x-sf.a.x,wy=sf.b.y-sf.a.y,wl=Math.hypot(wx,wy)||1;d.along=Math.sign((wx*rx+wy*ry)/wl)||1;}}
+    return d;}
+  function moveDrag(d,dx,dy){d.moved+=Math.abs(dx)+Math.abs(dy);d.tx=(d.tx||0)+dx;d.ty=(d.ty||0)+dy;if(d.moved<6)return;
+    if(!d.undo){pushUndo();d.undo=true;}const sf=d.sf,q=sf.poly,W=d.wpp;
+    if(d.h0!=null){const snap=e=>Math.round(e/32)*32;let h=snap(d.h0-d.ty*W);
+      if(sf.kind==="floor"){h=Math.min(h,q.ceil);q.floor=h;}else{h=Math.max(h,q.floor);q.ceil=h;}
+      status(`${sf.kind==="floor"?"Floor":"Ceiling"} of polygon ${doc.polys.indexOf(q)}: ${fmt(h)}`);}
+    else if(sf.kind==="wall"){const ox=Math.round(d.ox0-d.along*d.tx*W),oy=Math.round(d.oy0-d.ty*W);const t=texOfSurf(sf);sideSet(sf.a,sf.b,sf.part,{...t,ox,oy});
+      status(`Texture offset ${(ox/WU).toFixed(3)}, ${(oy/WU).toFixed(3)} WU`);}
+    else{const rx=-Math.sin(d.yaw),ry=Math.cos(d.yaw),fx=Math.cos(d.yaw),fy=Math.sin(d.yaw);
+      const wx=(d.tx*rx-d.ty*fx)*W,wy=(d.tx*ry-d.ty*fy)*W; const k=sf.kind==="floor"?"f":"c"; // screen right = camera right; screen up = away from the camera
+      q[k+"ox"]=Math.round(d.ox0-wx);q[k+"oy"]=Math.round(d.oy0-wy);status(`Texture offset ${(q[k+"ox"]/WU).toFixed(3)}, ${(q[k+"oy"]/WU).toFixed(3)} WU`);}
+    dragDirty=true;}
+  function endDrag(d){if(!d)return;if(d.moved<6){updateAim();paint(d.shift);return;}if(dragDirty){dragDirty=false;refresh();}changed();}
   cv.addEventListener("contextmenu",e=>e.preventDefault());
   cv.addEventListener("pointerdown",e=>{
     const locked=document.pointerLockElement===cv;
     if(e.button===2){updateAim();editSurface();return;}
     if(e.button===0&&e.altKey){updateAim();grab();return;}
+    if(e.button===0&&paletteShown&&e.pointerType==="mouse"){drag=startDrag(e,locked);if(drag){e.preventDefault();if(!locked)cv.setPointerCapture(e.pointerId);return;}if(locked)return;}
     if(locked){if(e.button===0)paint(e.shiftKey);return;}
     look={x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,touch:e.pointerType!=="mouse"};cv.setPointerCapture(e.pointerId);});
   cv.addEventListener("pointermove",e=>{
+    if(drag){const locked=document.pointerLockElement===cv;moveDrag(drag,locked?e.movementX:e.clientX-(drag.lx??drag.sx),locked?e.movementY:e.clientY-(drag.ly??drag.sy));drag.lx=e.clientX;drag.ly=e.clientY;return;}
     if(document.pointerLockElement===cv){st.yaw+=e.movementX*0.0025;st.pitch=clamp(st.pitch-e.movementY*0.0025,-1.3,1.3);return;}
     if(!look)return;st.yaw+=(e.clientX-look.x)*0.005;st.pitch=clamp(st.pitch-(e.clientY-look.y)*0.005,-1.3,1.3);look.x=e.clientX;look.y=e.clientY;});
-  cv.addEventListener("pointerup",e=>{const l=look;look=null;if(!l)return;
+  cv.addEventListener("pointerup",e=>{if(drag){const d=drag;drag=null;endDrag(d);return;}const l=look;look=null;if(!l)return;
     if(Math.hypot(e.clientX-l.sx,e.clientY-l.sy)<6&&!l.touch&&cv.requestPointerLock){try{const r=cv.requestPointerLock();if(r&&r.catch)r.catch(()=>{});}catch(_){}}});
   const pad=wrap.querySelector("#h3pad");const padKeys={f:"w",b:"s",l:"arrowleft",r:"arrowright"};
   pad.querySelectorAll("button[data-k]").forEach(b=>{const k=padKeys[b.dataset.k];b.addEventListener("pointerdown",e=>{e.preventDefault();keys.add(k);b.setPointerCapture(e.pointerId);});const up=()=>keys.delete(k);b.addEventListener("pointerup",up);b.addEventListener("pointercancel",up);});
@@ -2294,7 +2339,8 @@ function open3D(){
     else{const q0=polyAtPoint(st);const q=q0?hNow(q0):null;if(q){if(st.feet<q.floor)st.feet=Math.min(q.floor,st.feet+4*WU*dt);else if(st.feet>q.floor){st.vy-=9*WU*dt;st.feet=Math.max(q.floor,st.feet+st.vy*dt);}if(st.feet<=q.floor)st.vy=0;}}
     camera.position.set(st.x*S,(st.feet+EYE)*S,st.y*S);
     const cp=Math.cos(st.pitch);camera.lookAt(camera.position.x+Math.cos(st.yaw)*cp,camera.position.y+Math.sin(st.pitch),camera.position.z+Math.sin(st.yaw)*cp);
-    updateAim();if(aim!==lastAim){aimEl.textContent=describe(aim);lastAim=aim;}
+    if(dragDirty){dragDirty=false;refresh();}
+    updateAim();if(aim!==lastAim||drag){aimEl.textContent=describe(aim);lastAim=aim;}
     renderer.render(scene,camera);
     const q=polyAtPoint(st);posEl.textContent=`x ${(st.x/WU).toFixed(2)} y ${(st.y/WU).toFixed(2)} · ${q?"polygon "+doc.polys.indexOf(q):"outside"}`;
     raf=requestAnimationFrame(frame);}

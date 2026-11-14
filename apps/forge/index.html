@@ -68,7 +68,7 @@ table.spawn td.num{text-align:center}
 table.spawn input[type=number]{width:56px;padding:2px 4px;border:1px solid var(--line);background:var(--panel);border-radius:3px;font-family:var(--font-mono)}
 table.spawn .inf{display:inline-flex;align-items:center;gap:4px}table.spawn .inf label{display:inline-flex;align-items:center;gap:2px}
 canvas.dial{width:42px;height:42px;cursor:grab;touch-action:none;flex:none}
-.paintopts{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px}.paintopts input[type=number]{width:56px}
+.paintopts{display:flex;gap:10px;align-items:center;flex-wrap:wrap;font-size:12px}.paintopts select{max-width:190px;background:#18202a;color:#e6edf3;border:1px solid #3a4654;border-radius:4px;padding:2px 4px}.paintopts input[type=number]{width:56px}
 [hidden]{display:none!important}
 html,body{height:100%}
 body{background:var(--bg);color:var(--fg);font-family:var(--font-ui);font-size:13px;margin:0;overflow:hidden}
@@ -163,7 +163,7 @@ button,input,select,textarea{font:inherit;color:inherit}
 .levellist{display:flex;flex-direction:column;gap:4px}
 .levellist button{text-align:left}
 /* 3D */
-.view3d{position:fixed;inset:0;z-index:40;background:#000;display:flex;flex-direction:column}
+.view3d{position:fixed;inset:0;z-index:40;background:#000;display:flex;flex-direction:column;user-select:none;-webkit-user-select:none}
 .view3d canvas{flex:1;min-height:0;display:block;width:100%;touch-action:none}
 .hud{position:absolute;left:0;right:0;top:0;display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:calc(10px + env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) 10px max(12px,env(safe-area-inset-left,0px));background:linear-gradient(rgba(0,0,0,.75),rgba(0,0,0,0));color:#e6edf3;font-family:var(--font-mono);font-size:12px;pointer-events:none}
 .hud>*{pointer-events:auto}
