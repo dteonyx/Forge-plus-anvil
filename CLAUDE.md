@@ -19,6 +19,15 @@ The owner is a hobbyist who tests in the real game on Windows. Keep explanations
 - `window.__forge` exposes the main functions for tests.
 - The editor also runs as a claude.ai artifact. There, saving uses the artifact `downloads` capability (exports go in a zip) and "Generate with Claude" uses `sample`. Elsewhere it uses browser downloads and saves `.sceA` directly, and AI generation calls Gemini (Google, default for new users because of its free tier) or Claude (Anthropic) with the user's own key, kept in localStorage and sent only to that provider (`AI_PROVIDERS`, `geminiSample`, `anthropicSample` in forge.js). Gemini model IDs come from ai.google.dev/gemini-api/docs/models; check them when they age. Never ship a key in the repo or the site.
 
+## Three versions, one source
+
+`apps/forge` on `main` is the only source. The other two versions are built from it, so they never drift again:
+- **Website:** GitHub Pages publishes `main` automatically.
+- **Forge.exe:** `apps/launcher/build.sh` (copy the result to the user's `Forge+\Forge app\`, keeping the old one in `Forge+\Backup\`).
+- **claude.ai artifact** (https://claude.ai/artifact/Vs7h1LBeYemT9AEMwqRtDL): `python3 tools/build-single-file.py claude-ai forge.html`, then republish to that URL.
+
+After merging into `main`, rebuild Forge.exe and republish the artifact in the same session. Don't change the artifact or the exe on their own.
+
 ## Docs
 
 - `docs/PLAN.md`: phases, format notes, what Bungie's Infinity map taught us.
