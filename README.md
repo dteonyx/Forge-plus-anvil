@@ -20,6 +20,8 @@ Remakes of Bungie's Marathon editing tools for [Aleph One](https://alephone.lhow
 
 Exports are `.sceA` map files for Aleph One. Put one in your scenario folder and pick it as the map in Preferences → Environment.
 
+**Export to Unreal…** saves the current level as a `.glb` 3D model (floors, ceilings, walls, textures) that Unreal Engine 5 imports. See `docs/UNREAL_EXPORT.md`.
+
 ## No game data here
 
 Bungie's Shapes, maps, sounds and physics are not in this repo and never get bundled. Each user loads their own copy, and the editor keeps it in the browser.
