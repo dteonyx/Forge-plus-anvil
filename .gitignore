@@ -10,3 +10,6 @@ playwright-report/
 *.sndA
 *.phyA
 *.imgA
+apps/launcher/forge.html
+apps/launcher/Forge.exe
+apps/launcher/*.syso

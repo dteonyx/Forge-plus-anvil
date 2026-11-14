@@ -1,0 +1,26 @@
+1 ICON "forge.ico"
+1 VERSIONINFO
+FILEVERSION 0,8,0,0
+PRODUCTVERSION 0,8,0,0
+FILEOS 0x40004
+FILETYPE 0x1
+BEGIN
+  BLOCK "StringFileInfo"
+  BEGIN
+    BLOCK "040904B0"
+    BEGIN
+      VALUE "CompanyName", "Forge+ (hobby project)"
+      VALUE "FileDescription", "Forge+ map editor for Aleph One"
+      VALUE "FileVersion", "0.8.0"
+      VALUE "InternalName", "Forge"
+      VALUE "LegalCopyright", "GPL v3 or later"
+      VALUE "OriginalFilename", "Forge.exe"
+      VALUE "ProductName", "Forge+"
+      VALUE "ProductVersion", "0.8.0"
+    END
+  END
+  BLOCK "VarFileInfo"
+  BEGIN
+    VALUE "Translation", 0x409, 1200
+  END
+END

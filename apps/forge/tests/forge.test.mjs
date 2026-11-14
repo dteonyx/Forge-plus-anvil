@@ -173,3 +173,163 @@ test("Huge maps fill most of the map, and deathmatch maps stay smaller", async (
   assert.ok(r.net.w < r.solo.w && r.net.h < r.solo.h, "deathmatch maps are smaller than solo maps");
   assert.equal(r.solo.errors + r.net.errors, 0);
 });
+
+// Any folder of Marathon maps (for example the levels on the original Infinity disc). Each must import and round-trip.
+test("every map in MARATHON_MAPS_DIR round-trips byte-identical", { skip: !process.env.MARATHON_MAPS_DIR }, async () => {
+  const dir = process.env.MARATHON_MAPS_DIR;
+  for (const name of fs.readdirSync(dir)) {
+    const b64 = fs.readFileSync(`${dir}/${name}`).toString("base64");
+    const r = await app.page.evaluate((b64) => {
+      const bin = atob(b64); const u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+      const f = window.__forge; let w;
+      try { w = f.parseWad(u.buffer); } catch (e) { return { skipped: String(e) }; }
+      if (!w.levels || !w.levels.length) return { skipped: "no levels" };
+      f.openWholeMap(w, w.levels, "a");
+      const all = () => f.scenario.levels.map((_, i) => i);
+      const ex1 = f.buildScenarioFile(all()); w = f.parseWad(ex1.file.buffer.slice(0)); f.openWholeMap(w, w.levels, "b");
+      const ex2 = f.buildScenarioFile(all());
+      const skip = (i) => (i >= 91 && i < 99) || i === 124 || i === 125;
+      // the light editor reads and writes every light record exactly
+      const lightsExact = f.scenario.levels.every((L) => (L.doc.lights || []).every((b) => f.encodeLight(f.decodeLight(b)) === b));
+      return { levels: f.scenario.levels.length, lightsExact, same: ex1.file.length === ex2.file.length && ex1.file.every((v, i) => skip(i) || v === ex2.file[i]) };
+    }, b64);
+    if (!r.skipped) assert.ok(r.lightsExact, `${name}: light records`);
+    if (r.skipped) { console.log(`# ${name}: not a map (${r.skipped})`); continue; }
+    console.log(`# ${name}: ${r.levels} level(s), ${r.same ? "identical" : "DIFFERENT"}`);
+    assert.ok(r.same, name);
+  }
+});
+
+// Forge-style palettes: pick a value, click polygons to paint it, Alt-click to pick a value up.
+test("palette painting sets heights, types and liquids, and Alt-click picks up a value", async () => {
+  const { page } = app;
+  await page.evaluate(() => { const f = window.__forge; f.buildFromSpec(f.sampleSpec ? f.sampleSpec() : undefined, { replace: true }); document.getElementById("modal").hidden = true; f.fitView(); });
+  const pts = await page.evaluate(() => { const f = window.__forge; return f.doc.polys.slice(0, 3).map((q) => { const c = f.centroid(q.verts); return f.screenOf(c.x, c.y); }); });
+  await page.keyboard.press("Escape");
+  await page.keyboard.press("3"); // floor view
+  await page.evaluate(() => window.__forge.armPaint("floor", 768));
+  await page.mouse.click(pts[0].x, pts[0].y);
+  let r = await page.evaluate(() => window.__forge.doc.polys[0].floor);
+  assert.equal(r, 768);
+  // Alt-click another polygon picks up its height and arms it
+  await page.keyboard.down("Alt"); await page.mouse.click(pts[1].x, pts[1].y); await page.keyboard.up("Alt");
+  r = await page.evaluate(() => ({ armed: window.__forge.vpaint.value, h: window.__forge.doc.polys[1].floor }));
+  assert.equal(r.armed, r.h);
+  // undo puts the first height back
+  await page.keyboard.press("Control+z");
+  assert.notEqual(await page.evaluate(() => window.__forge.doc.polys[0].floor), 768);
+  // type and liquid palettes
+  await page.keyboard.press("6"); await page.evaluate(() => window.__forge.armPaint("type", 2));
+  await page.mouse.click(pts[2].x, pts[2].y);
+  assert.equal(await page.evaluate(() => window.__forge.doc.polys[2].type), 2);
+  await page.keyboard.press("7"); await page.evaluate(() => window.__forge.armPaint("liquid", { type: 1, low: 0, high: 256, dir: 0, speed: 0, flags: 0 }));
+  await page.mouse.click(pts[2].x, pts[2].y);
+  assert.equal(await page.evaluate(() => window.__forge.doc.polys[2].media.type), 1);
+  await page.keyboard.press("Escape");
+  assert.equal(await page.evaluate(() => window.__forge.vpaint), null);
+  assert.deepEqual(app.errors, []);
+});
+
+test("light table: lights encode exactly, paint onto rooms and walls, and export", async () => {
+  const r = await app.page.evaluate(() => {
+    const f = window.__forge; const d = f.doc;
+    const L = f.LIGHT_PRESETS.strobe.make(0.8); const i = f.addTableLight(L);
+    const same = f.encodeLight(f.decodeLight(d.lights[i])) === d.lights[i];
+    f.setViewMode("light"); f.applyPaint(d.polys[0], "light", { t: i });
+    const { chunks } = f.buildMapChunks(d); const get = (t) => chunks.find((c) => c[0] === t)[1];
+    const dv = (u) => new DataView(u.buffer, u.byteOffset, u.byteLength);
+    const poly = dv(get("POLY")); const floorLight = poly.getInt16(48), ceilLight = poly.getInt16(50);
+    const sids = dv(get("SIDS")); const wallLights = [];
+    for (let o = 0; o + 64 <= sids.byteLength; o += 64) if (sids.getInt16(o + 48) === 0) wallLights.push(sids.getInt16(o + 52));
+    const lite = dv(get("LITE")); const strobeType = lite.getInt16(i * 100);
+    // and round-trip
+    const a = f.buildWadFile(chunks, "T", 1); const b = f.buildWadFile(f.buildMapChunks(f.levelToDoc(f.parseWad(a.buffer.slice(0)).levels[0]).doc).chunks, "T", 1);
+    return { same, i, floorLight, ceilLight, wallLights, strobeType, rt: a.length === b.length && a.every((v, k) => v === b[k]) };
+  });
+  assert.ok(r.same);
+  assert.equal(r.floorLight, r.i); assert.equal(r.ceilLight, r.i);
+  assert.ok(r.wallLights.length && r.wallLights.every((l) => l === r.i));
+  assert.equal(r.strobeType, 1);
+  assert.ok(r.rt);
+});
+
+test("spawn table edits reach the exported map", async () => {
+  const { page } = app;
+  const placed = await page.evaluate(() => { const f = window.__forge; const d = f.doc; const q = d.polys[0]; const c = f.centroid(q.verts);
+    d.objs.push({ kind: 2, sub: 1, x: Math.round(c.x), y: Math.round(c.y), z: 0, facing: 0, flags: 0 }); f.openSpawnTable("items"); return 1; });
+  await page.fill("#spitems1_3", "4"); await page.dispatchEvent("#spitems1_3", "change");
+  await page.check("#spitems1_inf");
+  await page.fill("#spitems1_ch", "40"); await page.dispatchEvent("#spitems1_ch", "change");
+  await page.click("#dialog footer >> text=Save");
+  const r = await page.evaluate(() => { const f = window.__forge; const u = f.buildMapChunks(f.doc).chunks.find((c) => c[0] === "plac")[1];
+    const v = new DataView(u.buffer, u.byteOffset, u.byteLength); const o = 1 * 12; return [0, 2, 4, 6, 8, 10].map((k) => v.getInt16(o + k)); });
+  assert.equal(r[1], placed); assert.equal(r[3], 4); assert.equal(r[4], -1); assert.equal(Math.round(((r[5] & 0xffff) * 100) / 65535), 40);
+});
+
+// A tiny made-up Shapes file: a Water wall set (collection 17) with 3 textures and a Daytime landscape (collection 27) with 2.
+function tinyShapes() {
+  const sets = { 17: { type: 1, n: 3, w: 4, h: 4 }, 27: { type: 4, n: 2, w: 8, h: 4 } };
+  const blobs = {};
+  for (const [ci, c] of Object.entries(sets)) {
+    const bmSize = 26 + (c.h + 1) * 4 + c.w * c.h;
+    const ctOff = 64, llTab = ctOff + 16, llDefs = llTab + c.n * 4, bmTab = llDefs + c.n * 16, bms = bmTab + c.n * 4;
+    const buf = new DataView(new ArrayBuffer(bms + c.n * bmSize));
+    buf.setInt16(2, c.type); buf.setInt16(6, 2); buf.setInt16(8, 1); buf.setInt32(10, ctOff);
+    buf.setInt16(20, c.n); buf.setInt32(22, llTab); buf.setInt16(26, c.n); buf.setInt32(28, bmTab);
+    buf.setUint16(ctOff + 8 + 2, 0xffff); // colour 1 is white
+    for (let i = 0; i < c.n; i++) {
+      buf.setInt32(llTab + i * 4, llDefs + i * 16); buf.setInt16(llDefs + i * 16 + 6, i);
+      const b = bms + i * bmSize; buf.setInt32(bmTab + i * 4, b);
+      buf.setInt16(b, c.w); buf.setInt16(b + 2, c.h); buf.setInt16(b + 4, c.w);
+      for (let k = 0; k < c.w * c.h; k++) buf.setUint8(b + 26 + (c.h + 1) * 4 + k, k & 1);
+    }
+    blobs[ci] = new Uint8Array(buf.buffer);
+  }
+  let off = 1024; const parts = []; const head = new DataView(new ArrayBuffer(1024));
+  for (const [ci, b] of Object.entries(blobs)) { head.setInt32(ci * 32 + 4, off); head.setInt32(ci * 32 + 8, b.length); parts.push(b); off += b.length; }
+  const out = new Uint8Array(off + 64); out.set(new Uint8Array(head.buffer), 0);
+  let p = 1024; for (const b of parts) { out.set(b, p); p += b.length; }
+  return [...out];
+}
+
+test("landscape (sky) textures show in the texture picker and paint as sky", async () => {
+  const { page, errors } = app;
+  await page.evaluate(async (bytes) => {
+    const f = window.__forge;
+    f.setDoc(f.newDoc("inf"));
+    f.applySpec(f.sampleSpec(), false, "test");
+    f.doc.info.env = 0; f.doc.info.landscape = 0;
+    await f.installShapes("inf", "tiny", new Uint8Array(bytes).buffer, false);
+  }, tinyShapes());
+  assert.deepEqual(await page.evaluate(() => [window.__forge.texCount(), window.__forge.landCount(), window.__forge.landCol()]), [3, 2, 27]);
+
+  // the surface dialog's picker lists the sky textures after the wall set
+  await page.evaluate(() => { const f = window.__forge; f.openSurfaceDialog({ kind: "ceil", poly: f.doc.polys[0] }); });
+  await page.locator("#dialog .texpick").first().click();
+  assert.equal(await page.locator("#texPickSky .texbtn").count(), 2);
+  await page.locator("#texPickSky .texbtn").nth(1).click();
+  assert.equal(await page.locator("#sfXfer").inputValue(), "9", "picking a sky texture sets Landscape mode");
+  await page.locator("#dialog button", { hasText: "Apply" }).click();
+  const q = await page.evaluate(() => { const q = window.__forge.doc.polys[0]; return { ctex: q.ctex, ccol: q.ccol, cxfer: q.cxfer }; });
+  assert.deepEqual(q, { ctex: 1, ccol: 27, cxfer: 9 });
+
+  // it exports as a landscape texture and comes back the same
+  const back = await page.evaluate(() => {
+    const f = window.__forge;
+    const a = f.buildWadFile(f.buildMapChunks(f.doc).chunks, "Test", 1);
+    const q = f.levelToDoc(f.parseWad(a.buffer.slice(0)).levels[0]).doc.polys[0];
+    return { ctex: q.ctex, ccol: q.ccol, cxfer: q.cxfer };
+  });
+  assert.deepEqual(back, { ctex: 1, ccol: 27, cxfer: 9 });
+
+  // picking a wall texture again takes the sky off
+  await page.evaluate(() => { const f = window.__forge; f.openSurfaceDialog({ kind: "ceil", poly: f.doc.polys[0] }); });
+  await page.locator("#dialog .texpick").first().click();
+  await page.locator("#dialog .texbtn").nth(2).click();
+  assert.equal(await page.locator("#sfXfer").inputValue(), "0");
+  await page.locator("#dialog button", { hasText: "Apply" }).click();
+  assert.deepEqual(await page.evaluate(() => { const q = window.__forge.doc.polys[0]; return [q.ctex, q.ccol ?? null, q.cxfer]; }), [2, null, 0]);
+
+  await page.evaluate(() => window.__forge.removeShapes("inf"));
+  assert.deepEqual(errors, []);
+});
