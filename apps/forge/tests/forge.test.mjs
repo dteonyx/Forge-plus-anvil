@@ -173,3 +173,71 @@ test("Huge maps fill most of the map, and deathmatch maps stay smaller", async (
   assert.ok(r.net.w < r.solo.w && r.net.h < r.solo.h, "deathmatch maps are smaller than solo maps");
   assert.equal(r.solo.errors + r.net.errors, 0);
 });
+
+// A tiny made-up Shapes file: a Water wall set (collection 17) with 3 textures and a Daytime landscape (collection 27) with 2.
+function tinyShapes() {
+  const sets = { 17: { type: 1, n: 3, w: 4, h: 4 }, 27: { type: 4, n: 2, w: 8, h: 4 } };
+  const blobs = {};
+  for (const [ci, c] of Object.entries(sets)) {
+    const bmSize = 26 + (c.h + 1) * 4 + c.w * c.h;
+    const ctOff = 64, llTab = ctOff + 16, llDefs = llTab + c.n * 4, bmTab = llDefs + c.n * 16, bms = bmTab + c.n * 4;
+    const buf = new DataView(new ArrayBuffer(bms + c.n * bmSize));
+    buf.setInt16(2, c.type); buf.setInt16(6, 2); buf.setInt16(8, 1); buf.setInt32(10, ctOff);
+    buf.setInt16(20, c.n); buf.setInt32(22, llTab); buf.setInt16(26, c.n); buf.setInt32(28, bmTab);
+    buf.setUint16(ctOff + 8 + 2, 0xffff); // colour 1 is white
+    for (let i = 0; i < c.n; i++) {
+      buf.setInt32(llTab + i * 4, llDefs + i * 16); buf.setInt16(llDefs + i * 16 + 6, i);
+      const b = bms + i * bmSize; buf.setInt32(bmTab + i * 4, b);
+      buf.setInt16(b, c.w); buf.setInt16(b + 2, c.h); buf.setInt16(b + 4, c.w);
+      for (let k = 0; k < c.w * c.h; k++) buf.setUint8(b + 26 + (c.h + 1) * 4 + k, k & 1);
+    }
+    blobs[ci] = new Uint8Array(buf.buffer);
+  }
+  let off = 1024; const parts = []; const head = new DataView(new ArrayBuffer(1024));
+  for (const [ci, b] of Object.entries(blobs)) { head.setInt32(ci * 32 + 4, off); head.setInt32(ci * 32 + 8, b.length); parts.push(b); off += b.length; }
+  const out = new Uint8Array(off + 64); out.set(new Uint8Array(head.buffer), 0);
+  let p = 1024; for (const b of parts) { out.set(b, p); p += b.length; }
+  return [...out];
+}
+
+test("landscape (sky) textures show in the texture picker and paint as sky", async () => {
+  const { page, errors } = app;
+  await page.evaluate(async (bytes) => {
+    const f = window.__forge;
+    f.setDoc(f.newDoc("inf"));
+    f.applySpec(f.sampleSpec(), false, "test");
+    f.doc.info.env = 0; f.doc.info.landscape = 0;
+    await f.installShapes("inf", "tiny", new Uint8Array(bytes).buffer, false);
+  }, tinyShapes());
+  assert.deepEqual(await page.evaluate(() => [window.__forge.texCount(), window.__forge.landCount(), window.__forge.landCol()]), [3, 2, 27]);
+
+  // the surface dialog's picker lists the sky textures after the wall set
+  await page.evaluate(() => { const f = window.__forge; f.openSurfaceDialog({ kind: "ceil", poly: f.doc.polys[0] }); });
+  await page.locator("#dialog .texpick").first().click();
+  assert.equal(await page.locator("#texPickSky .texbtn").count(), 2);
+  await page.locator("#texPickSky .texbtn").nth(1).click();
+  assert.equal(await page.locator("#sfXfer").inputValue(), "9", "picking a sky texture sets Landscape mode");
+  await page.locator("#dialog button", { hasText: "Apply" }).click();
+  const q = await page.evaluate(() => { const q = window.__forge.doc.polys[0]; return { ctex: q.ctex, ccol: q.ccol, cxfer: q.cxfer }; });
+  assert.deepEqual(q, { ctex: 1, ccol: 27, cxfer: 9 });
+
+  // it exports as a landscape texture and comes back the same
+  const back = await page.evaluate(() => {
+    const f = window.__forge;
+    const a = f.buildWadFile(f.buildMapChunks(f.doc).chunks, "Test", 1);
+    const q = f.levelToDoc(f.parseWad(a.buffer.slice(0)).levels[0]).doc.polys[0];
+    return { ctex: q.ctex, ccol: q.ccol, cxfer: q.cxfer };
+  });
+  assert.deepEqual(back, { ctex: 1, ccol: 27, cxfer: 9 });
+
+  // picking a wall texture again takes the sky off
+  await page.evaluate(() => { const f = window.__forge; f.openSurfaceDialog({ kind: "ceil", poly: f.doc.polys[0] }); });
+  await page.locator("#dialog .texpick").first().click();
+  await page.locator("#dialog .texbtn").nth(2).click();
+  assert.equal(await page.locator("#sfXfer").inputValue(), "0");
+  await page.locator("#dialog button", { hasText: "Apply" }).click();
+  assert.deepEqual(await page.evaluate(() => { const q = window.__forge.doc.polys[0]; return [q.ctex, q.ccol ?? null, q.cxfer]; }), [2, null, 0]);
+
+  await page.evaluate(() => window.__forge.removeShapes("inf"));
+  assert.deepEqual(errors, []);
+});
