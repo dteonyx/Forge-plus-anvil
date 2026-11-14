@@ -2528,6 +2528,143 @@ function doExport(all){
 }
 function saveProject(){syncLevel();offerFile(safeName(scenario.name)+".forge.json",serializeScenario());}
 
+// =============================================================== export to Unreal (glTF 2.0, .glb)
+// Unreal Engine 5 imports glTF directly. glTF is in metres with Y up; Unreal's importer turns that into
+// centimetres and Z up by itself. The layout matches Forge's 3D view: map x → x, height → y, map y → z,
+// so the level looks the same from above as it does on the 2D map.
+// Default size: 1 World Unit = 225 cm, so Marathon's 0.8 WU player is 1.8 m, the height of Unreal's mannequin.
+const UNREAL_CM_PER_WU=225;
+// The level's surfaces grouped by texture, the way the 3D view draws them (doors and lifts in their starting position).
+// Coordinates are in Marathon's internal units (1 WU = 1024). Each triangle's corners are listed counter-clockwise
+// as seen from the side the surface faces, which is what glTF expects for a visible face.
+function unrealSurfaces(){
+  const groups=new Map();
+  const grp=(b,col,clut,kind="")=>{const key=`${b}:${col??""}:${clut|0}:${kind}`;if(!groups.has(key))groups.set(key,{key,b,col:col??null,clut:clut|0,kind,pos:[],nrm:[],uv:[]});return groups.get(key);};
+  const PI=platformInfo(doc);const H=q=>{const r=PI.get(q);return r?{floor:r.floor,ceil:r.ceil}:q;};
+  const edgeOwner=new Map();doc.polys.forEach((q,i)=>q.verts.forEach((v,k)=>edgeOwner.set(sideKey(v,q.verts[(k+1)%q.verts.length]),i)));
+  // one triangle: flips its corner order when needed so the face points along n
+  function tri(g,P,U,n){
+    const e1=[P[1][0]-P[0][0],P[1][1]-P[0][1],P[1][2]-P[0][2]],e2=[P[2][0]-P[0][0],P[2][1]-P[0][1],P[2][2]-P[0][2]];
+    const c=[e1[1]*e2[2]-e1[2]*e2[1],e1[2]*e2[0]-e1[0]*e2[2],e1[0]*e2[1]-e1[1]*e2[0]];
+    const order=c[0]*n[0]+c[1]*n[1]+c[2]*n[2]<0?[0,2,1]:[0,1,2];
+    for(const i of order){g.pos.push(...P[i]);g.nrm.push(...n);g.uv.push(...U[i]);}
+  }
+  function wall(q,a,b,y0,y1,part,inward){
+    if(y1-y0<1)return;const t=part==="trans"?((sideGet(a,b)||{}).trans):wallTex(q,a,b,part);if(!t)return;
+    const g=grp(t.b,t.col,t.clut,part==="trans"?"t":"");const len=Math.hypot(b.x-a.x,b.y-a.y);
+    const P=[[a.x,y0,a.y],[b.x,y0,b.y],[b.x,y1,b.y],[a.x,y1,a.y]];
+    const u0=(t.ox||0)/WU,u1=(len+(t.ox||0))/WU,vt=(t.oy||0)/WU,vb=((y1-y0)+(t.oy||0))/WU;
+    const U=[[u0,vb],[u1,vb],[u1,vt],[u0,vt]];
+    tri(g,[P[0],P[1],P[2]],[U[0],U[1],U[2]],inward);tri(g,[P[0],P[2],P[3]],[U[0],U[2],U[3]],inward);
+  }
+  function flat(g,verts,h,ox,oy,n){
+    for(let k=1;k<verts.length-1;k++){const T=[verts[0],verts[k],verts[k+1]];
+      tri(g,T.map(v=>[v.x,h,v.y]),T.map(v=>[(v.x+ox)/WU,(v.y+oy)/WU]),n);}
+  }
+  const liquids=[];
+  doc.polys.forEach(q=>{
+    const h=H(q),F=h.floor,C=h.ceil;
+    flat(grp(q.ftex,q.fcol,q.fclut),q.verts,F,q.fox||0,q.foy||0,[0,1,0]);
+    flat(grp(q.ctex,q.ccol,q.cclut),q.verts,C,q.cox||0,q.coy||0,[0,-1,0]);
+    if(q.media&&q.media.high>F){const m=q.media;const g=grp(MEDIA_TEX[m.type]??0,null,0,"m"+(m.type|0));g.media=m.type|0;if(!liquids.includes(g))liquids.push(g);flat(g,q.verts,Math.min(m.high,C),0,0,[0,1,0]);}
+    const cx=q.verts.reduce((s,v)=>s+v.x,0)/q.verts.length,cy=q.verts.reduce((s,v)=>s+v.y,0)/q.verts.length;
+    q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];
+      const oi=edgeOwner.get(sideKey(b,a));const o=oi!=null?H(doc.polys[oi]):null;
+      let nx=-(b.y-a.y),ny=b.x-a.x;const nl=Math.hypot(nx,ny)||1;nx/=nl;ny/=nl;
+      if(nx*(cx-(a.x+b.x)/2)+ny*(cy-(a.y+b.y)/2)<0){nx=-nx;ny=-ny;}
+      const inward=[nx,0,ny];
+      if(!o||o.floor>=C||o.ceil<=F)wall(q,a,b,F,C,"full",inward);
+      else{if(o.floor>F)wall(q,a,b,F,Math.min(o.floor,C),"lower",inward);if(o.ceil<C)wall(q,a,b,Math.max(o.ceil,F),C,"upper",inward);
+        if((sideGet(a,b)||{}).trans)wall(q,a,b,Math.max(o.floor,F),Math.min(o.ceil,C),"trans",inward);}
+    });
+  });
+  for(const [k,g] of groups)if(!g.pos.length)groups.delete(k);
+  return {solid:[...groups.values()].filter(g=>!liquids.includes(g)),liquids:liquids.filter(g=>g.pos.length)};
+}
+// a texture as PNG bytes; see-through textures (kind "t") get their background colour made transparent, as in the 3D view
+function unrealPng(g){
+  const src=texCanvasFor(g.b,g.col??undefined,g.clut);const c=document.createElement("canvas");c.width=src.width;c.height=src.height;
+  const x=c.getContext("2d");x.drawImage(src,0,0);
+  if(g.kind==="t"){const im=x.getImageData(0,0,c.width,c.height);const r0=im.data[0],g0=im.data[1],b0=im.data[2];
+    for(let i=0;i<im.data.length;i+=4)if(im.data[i]===r0&&im.data[i+1]===g0&&im.data[i+2]===b0)im.data[i+3]=0;x.putImageData(im,0,0);}
+  const s=atob(c.toDataURL("image/png").split(",")[1]);const u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u;
+}
+// Packs meshes, materials and PNG textures into one binary glTF (.glb) file.
+// meshes: [{name, primitives:[{pos, nrm, uv, material}]}]; materials: [{name, png, alpha:"OPAQUE"|"MASK"|"BLEND", color:[r,g,b,a], doubleSided}]
+function packGlb(meshes,materials,info={}){
+  const bin=[];let binLen=0;const views=[],accessors=[];
+  function view(bytes,target){const pad=(4-binLen%4)%4;if(pad){bin.push(new Uint8Array(pad));binLen+=pad;}
+    const v={buffer:0,byteOffset:binLen,byteLength:bytes.byteLength};if(target)v.target=target;bin.push(new Uint8Array(bytes.buffer,bytes.byteOffset,bytes.byteLength));binLen+=bytes.byteLength;views.push(v);return views.length-1;}
+  function acc(arr,type,n){const f=new Float32Array(arr);const a={bufferView:view(f,34962),componentType:5126,count:f.length/n,type};
+    if(type==="VEC3"){const mn=[Infinity,Infinity,Infinity],mx=[-Infinity,-Infinity,-Infinity];for(let i=0;i<f.length;i++){const k=i%3;if(f[i]<mn[k])mn[k]=f[i];if(f[i]>mx[k])mx[k]=f[i];}a.min=mn;a.max=mx;}
+    accessors.push(a);return accessors.length-1;}
+  const gm={meshes:[],nodes:[]};
+  for(const m of meshes){const prims=[];
+    for(const p of m.primitives){const n=p.pos.length/3;const idx=new Uint32Array(n);for(let i=0;i<n;i++)idx[i]=i;
+      const attributes={POSITION:acc(p.pos,"VEC3",3),NORMAL:acc(p.nrm,"VEC3",3),TEXCOORD_0:acc(p.uv,"VEC2",2)};
+      accessors.push({bufferView:view(idx,34963),componentType:5125,count:n,type:"SCALAR"});
+      prims.push({attributes,indices:accessors.length-1,material:p.material,mode:4});}
+    gm.meshes.push({name:m.name,primitives:prims});gm.nodes.push({name:m.name,mesh:gm.meshes.length-1});}
+  const images=[],textures=[];
+  const mats=materials.map(m=>{const out={name:m.name,pbrMetallicRoughness:{metallicFactor:0,roughnessFactor:1}};
+    if(m.color)out.pbrMetallicRoughness.baseColorFactor=m.color;
+    if(m.png){images.push({name:m.name,mimeType:"image/png",bufferView:view(m.png)});textures.push({sampler:0,source:images.length-1});out.pbrMetallicRoughness.baseColorTexture={index:textures.length-1};}
+    if(m.alpha&&m.alpha!=="OPAQUE")out.alphaMode=m.alpha;if(m.alpha==="MASK")out.alphaCutoff=0.5;if(m.doubleSided)out.doubleSided=true;return out;});
+  const json={asset:{version:"2.0",generator:"Forge Remake (Export to Unreal)"},scene:0,scenes:[{name:info.name||"Level",nodes:gm.nodes.map((_,i)=>i)}],nodes:gm.nodes,meshes:gm.meshes,materials:mats,
+    // nearest filtering keeps Marathon's pixel look; textures repeat across surfaces
+    samplers:[{magFilter:9728,minFilter:9986,wrapS:10497,wrapT:10497}],accessors,bufferViews:views,buffers:[{byteLength:0}]};
+  if(images.length){json.images=images;json.textures=textures;}else delete json.samplers;
+  if(info.extras)json.asset.extras=info.extras;
+  const binPad=(4-binLen%4)%4;json.buffers[0].byteLength=binLen+binPad;
+  let jb=new TextEncoder().encode(JSON.stringify(json));const jPad=(4-jb.length%4)%4;
+  const total=12+8+jb.length+jPad+8+binLen+binPad;const out=new Uint8Array(total);const dv=new DataView(out.buffer);
+  dv.setUint32(0,0x46546C67,true);dv.setUint32(4,2,true);dv.setUint32(8,total,true);
+  dv.setUint32(12,jb.length+jPad,true);dv.setUint32(16,0x4E4F534A,true);out.set(jb,20);out.fill(0x20,20+jb.length,20+jb.length+jPad);
+  let p=20+jb.length+jPad;dv.setUint32(p,binLen+binPad,true);dv.setUint32(p+4,0x004E4942,true);p+=8;
+  for(const b of bin){out.set(b,p);p+=b.byteLength;}
+  return out;
+}
+// The current level as a .glb for Unreal. cmPerWU sets the size of one World Unit in Unreal; liquids adds the liquid surfaces as their own mesh.
+function buildUnrealGlb({cmPerWU=UNREAL_CM_PER_WU,liquids=true}={}){
+  const {solid,liquids:liq}=unrealSurfaces();const s=cmPerWU/100/WU; // internal units → metres
+  const materials=[],meshes=[];
+  const texName=g=>`T${g.col??(17+doc.info.env)}_${g.b}${g.clut?"_c"+g.clut:""}`;
+  const prims=list=>list.map(g=>({pos:g.pos.map(v=>v*s),nrm:g.nrm,uv:g.uv,material:materials.length-1}));
+  const solidPrims=[];for(const g of solid){
+    materials.push({name:g.kind==="t"?texName(g)+"_SeeThrough":texName(g),png:unrealPng(g),alpha:g.kind==="t"?"MASK":"OPAQUE",doubleSided:g.kind==="t"});solidPrims.push(...prims([g]));}
+  const name=doc.info.name||"Level";
+  if(solidPrims.length)meshes.push({name,primitives:solidPrims});
+  let triangles=solid.reduce((n,g)=>n+g.pos.length/9,0);
+  if(liquids&&liq.length){const lp=[];for(const g of liq){const c=MEDIA_TINT[g.media]||[1,1,1];
+      materials.push({name:`Liquid_${(MEDIA_TYPES.find(m=>m[0]===g.media)||[0,"Liquid"])[1].replace(/\W+/g,"")}`,png:unrealPng(g),alpha:"BLEND",color:[c[0],c[1],c[2],0.65],doubleSided:true});lp.push(...prims([g]));
+      triangles+=g.pos.length/9;}
+    meshes.push({name:name+" liquids",primitives:lp});}
+  const file=packGlb(meshes,materials,{name,extras:{marathonWorldUnitCm:cmPerWU,level:name}});
+  return {file,stats:{triangles,materials:materials.length,liquids:liquids?liq.length:0}};
+}
+function exportUnreal(o={}){
+  if(!doc.polys.length){toast("Draw or generate a level first.");return false;}
+  let res;try{res=buildUnrealGlb(o);}catch(e){toast("Unreal export failed: "+e.message);return false;}
+  const name=safeName(doc.info.name);const mb=(res.file.length/1048576).toFixed(1);
+  status(`Built ${name}.glb for Unreal: ${res.stats.triangles} triangles, ${res.stats.materials} materials (${mb} MB).${realTextures()?"":" Textures are numbered stand-ins; load your Shapes file for the real ones."}`);
+  if(!inClaude())return offerFile(name+".glb",res.file);
+  const readme=new TextEncoder().encode(`${doc.info.name}\r\nMade with Forge Remake.\r\n\r\n${name}.glb is this level as a glTF 2.0 model for Unreal Engine 5.\r\nIn Unreal: File > Import Into Level, pick ${name}.glb, then Import.\r\n1 World Unit = ${o.cmPerWU||UNREAL_CM_PER_WU} cm.\r\n`);
+  return offerFile(name+" (Unreal).zip",zipFiles([{name:name+".glb",data:res.file},{name:"README.txt",data:readme}]));
+}
+function openUnrealExport(){
+  if(!doc.polys.length){toast("Draw or generate a level first.");return;}
+  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="10px";
+  const n=document.createElement("p");n.className="note";
+  n.innerHTML=`Saves “${doc.info.name.replace(/[<>&]/g,"")}” as a <b>.glb</b> model (glTF 2.0) with its floors, ceilings, walls and textures. In Unreal Engine 5, use <b>File → Import Into Level</b> and pick the file. Doors and lifts come out in their starting position; objects and lights aren't included.${realTextures()?"":" Load your Shapes file first to get the real textures; otherwise the numbered stand-ins go with it."}`;
+  body.appendChild(n);
+  const sc=numInput("ueScale",String(UNREAL_CM_PER_WU),"1",()=>{});body.appendChild(field("1 World Unit",sc,"cm"));
+  const ck=document.createElement("label");ck.className="checks";ck.innerHTML=`<input type="checkbox" id="ueLiquids" checked> Include liquid surfaces (as their own mesh)`;body.appendChild(ck);
+  openModal("Export to Unreal",body,[button("Cancel",closeModal),button("Export",()=>{const cm=clamp(parseFloat(sc.value)||UNREAL_CM_PER_WU,1,10000);const liquids=ck.querySelector("input").checked;closeModal();exportUnreal({cmPerWU:cm,liquids});},"primary")]);
+}
+$("bUnreal").onclick=openUnrealExport;
+// for the tests (kept apart from window.__forge so this stays a separate change)
+window.__forgeUnreal={unrealSurfaces,packGlb,buildUnrealGlb,exportUnreal,openUnrealExport,UNREAL_CM_PER_WU};
+
 // =============================================================== opening files
 async function openFileBuffer(buf,fname){
   const head=new TextDecoder().decode(new Uint8Array(buf.slice(0,200))).trim();
