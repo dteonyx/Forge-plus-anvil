@@ -1600,14 +1600,18 @@ function renderIssues(p){
 function focusOn(items){const vs=items.flatMap(x=>x.verts?x.verts:x.a?[x.a,x.b]:[x]);if(!vs.length)return;const c=centroid(vs);view.cx=c.x;view.cy=c.y;if(view.scale*WU<30)view.scale=40/WU;redraw();}
 
 // =============================================================== modal helpers
+let modalOnClose=null;
+// o.onClose runs however the dialog closes (Close, Esc, a click outside, or a button that calls closeModal);
+// o.dock puts the dialog at the side with no dimmed backdrop, so the 3D view stays visible behind it
 function openModal(title,bodyEl,footerBtns,o={}){
+  modalOnClose=o.onClose||null;$("modal").classList.toggle("docked",!!o.dock);
   const d=$("dialog");d.innerHTML="";d.classList.toggle("wide",!!o.wide);const hd=document.createElement("header");const h=document.createElement("h2");h.textContent=title;hd.appendChild(h);
   const x=button("Close",closeModal);hd.appendChild(x);d.appendChild(hd);
   const b=document.createElement("div");b.className="body";b.appendChild(bodyEl);d.appendChild(b);
   if(footerBtns&&footerBtns.length){const f=document.createElement("footer");footerBtns.forEach(x=>f.appendChild(x));d.appendChild(f);}
   $("modal").hidden=false;
 }
-function closeModal(){$("modal").hidden=true;if(genCtl){genCtl.abort();genCtl=null;}}
+function closeModal(){$("modal").hidden=true;$("modal").classList.remove("docked");if(genCtl){genCtl.abort();genCtl=null;}const f=modalOnClose;modalOnClose=null;if(f)f();}
 $("modal").addEventListener("pointerdown",e=>{if(e.target.id==="modal")closeModal();});
 document.addEventListener("keydown",e=>{if(e.key==="Escape"&&!$("modal").hidden)closeModal();});
 function confirmBox(title,msg,okLabel,fn){const p=document.createElement("p");p.className="note";p.style.fontSize="13px";p.textContent=msg;openModal(title,p,[button("Cancel",closeModal),button(okLabel,()=>{closeModal();fn();},"primary")]);}
@@ -2087,8 +2091,15 @@ const PANELS_OTHER=[["shield","Shield recharger",0,2],["shield2","2x shield rech
 function panelList(env){const base=PANEL_BASE[env]??0;return (env===0?PANELS_WATER:PANELS_OTHER).map(([k,l,off,tex])=>({key:k,label:l,type:base+off,tex}));}
 const PANEL_PERM={light:"Light #",platform:"Platform polygon #",tag:"Tag #",terminal:"Terminal #",chip:"Tag #",destroy:"Tag #"};
 // Surface settings (what Forge's right-click dialog edited)
-function openSurfaceDialog(s,onDone){
+// o.preview(): called after each change, so the 3D view can show it while the dialog is open (o.dock keeps it beside the view).
+// Nothing is kept unless Apply is pressed; closing any other way puts the surface back.
+function openSurfaceDialog(s,onDone,o={}){
   const q=s.poly;const isWall=s.kind==="wall";
+  const sk=isWall?sideKey(s.a,s.b):null,F=s.kind==="floor"?"f":"c";
+  const saved=isWall?JSON.stringify(doc.sides.get(sk)??null):JSON.stringify(Object.fromEntries(["tex","ox","oy","xfer","light","li","col","clut"].map(k=>[k,q[F+k]])));
+  function restore(){if(isWall){const v=JSON.parse(saved);if(v)doc.sides.set(sk,v);else doc.sides.delete(sk);}
+    else{const v=JSON.parse(saved);for(const k of ["tex","ox","oy","xfer","light","li","col","clut"]){if(v[k]===undefined)delete q[F+k];else q[F+k]=v[k];}}}
+  let applied=false;
   const cur=isWall?{...(s.part==="trans"?((sideGet(s.a,s.b)||{}).trans||{b:0,ox:0,oy:0}):wallTex(q,s.a,s.b,s.part))}:s.kind==="floor"?{b:q.ftex,ox:q.fox||0,oy:q.foy||0,xfer:q.fxfer||0,light:q.flight,li:q.fli,col:q.fcol,clut:q.fclut}:{b:q.ctex,ox:q.cox||0,oy:q.coy||0,xfer:q.cxfer||0,light:q.clight,li:q.cli,col:q.ccol,clut:q.cclut};
   const origLight=cur.light;
   const side=isWall?(sideGet(s.a,s.b)||{}):null;let panel=side&&side.panel?{...side.panel}:null;
@@ -2098,11 +2109,14 @@ function openSurfaceDialog(s,onDone){
   const drawTb=()=>{tb.innerHTML="";tb.appendChild(thumb(tex,28,cur.col));const sp=document.createElement("span");sp.textContent=isLandCol(cur.col)?`Landscape ${tex}`:ownCol(cur.col)!=null?`${setName(cur.col)}${tex}`:`Texture ${tex}`;tb.appendChild(sp);};drawTb();
   let picked=false;
   tb.onclick=()=>{
+    // the picker replaces this dialog: picking keeps the change and reopens it; closing the picker puts the surface back
+    applied=true;restore();
     openTexturePicker("Texture",{b:tex,col:cur.col},(v,c)=>{cur.b=v;tex=v;picked=true;delete cur.clut;
       if(c!=null)cur.col=c;else delete cur.col;
       if(isLandCol(c))xf.value=String(XFER_LANDSCAPE);else if(+xf.value===XFER_LANDSCAPE)xf.value="0";
       applyAndReopen();},true);
-    function applyAndReopen(){commit(false);openSurfaceDialog(s,onDone);}};
+    $("dialog").dataset.surfacePicker="1";
+    function applyAndReopen(){commit(false);openSurfaceDialog(s,onDone,o);}};
   body.appendChild(field("Texture",tb));
   const ox=numInput("sfX",((cur.ox||0)/WU).toFixed(3),"0.03125",()=>{});const oy=numInput("sfY",((cur.oy||0)/WU).toFixed(3),"0.03125",()=>{});
   body.appendChild(field("X offset",ox,"WU"));body.appendChild(field("Y offset",oy,"WU"));
@@ -2126,8 +2140,14 @@ function openSurfaceDialog(s,onDone){
       const n=document.createElement("p");n.className="note";n.textContent=`Uses the ${def.label.toLowerCase()} texture (${def.tex}) unless you pick another.`;extra.appendChild(n);}
     renderPanel();body.appendChild(g);
   }
+  // live preview: put the surface back, apply what the dialog shows now, and let the 3D view redraw
+  function preview(){if(!o.preview)return;restore();write();o.preview();}
+  body.addEventListener("input",preview);body.addEventListener("change",preview);
   function commit(close){
-    pushUndo();
+    restore();pushUndo();write();applied=true;
+    if(close){closeModal();onDone&&onDone();}
+  }
+  function write(){
     const t={b:cur.b,ox:Math.round((parseFloat(ox.value)||0)*WU),oy:Math.round((parseFloat(oy.value)||0)*WU)};
     if(picked||cur.b===origTex){if(cur.col!=null)t.col=cur.col;if(cur.clut)t.clut=cur.clut;}
     const x=+xf.value;if(x)t.xfer=x;
@@ -2143,9 +2163,10 @@ function openSurfaceDialog(s,onDone){
       else if(rec.panel){delete rec.panel;doc.sides.set(sideKey(s.a,s.b),rec);}}
     else if(s.kind==="floor"){q.ftex=t.b;q.fox=t.ox;q.foy=t.oy;q.fxfer=t.xfer||0;if(t.light!=null)q.flight=t.light;else delete q.flight;if(t.li==null)delete q.fli;if(t.col!=null)q.fcol=t.col;else delete q.fcol;if(t.clut)q.fclut=t.clut;else delete q.fclut;}
     else{q.ctex=t.b;q.cox=t.ox;q.coy=t.oy;q.cxfer=t.xfer||0;if(t.light!=null)q.clight=t.light;else delete q.clight;if(t.li==null)delete q.cli;if(t.col!=null)q.ccol=t.col;else delete q.ccol;if(t.clut)q.cclut=t.clut;else delete q.cclut;}
-    if(close){closeModal();onDone&&onDone();}
   }
-  openModal("Surface settings",body,[button("Cancel",()=>{closeModal();onDone&&onDone();}),button("Apply",()=>commit(true),"primary")]);
+  if(o.preview){const n=document.createElement("p");n.className="note";n.textContent="The 3D view shows your changes as you make them. Cancel puts the surface back.";body.appendChild(n);}
+  openModal("Surface settings",body,[button("Cancel",closeModal),button("Apply",()=>commit(true),"primary")],
+    {dock:o.dock,onClose:()=>{if(!applied){restore();onDone&&onDone();}}});
 }
 let paintTex=5;let view3d=null;let paletteShown=true;let paintLight=100;const paintApply={tex:true,light:false};
 function open3D(){
@@ -2279,7 +2300,7 @@ function open3D(){
     else{const t=texOfSurf(s);sideSet(s.a,s.b,s.part,{...t,ox:(t.ox||0)+dx,oy:(t.oy||0)+dy});}
     refresh();}
   function editSurface(){if(!aim)return;try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}keys.clear();
-    openSurfaceDialog(aim,()=>{refresh();});}
+    openSurfaceDialog(aim,()=>{refresh();},{dock:true,preview:refresh});}
   let dirty=false,lastAim;
   function setFly(v){fly=v;wrap.querySelector("#h3fly").classList.toggle("on",v);status(v?"Flying: walls don't stop you. R rises, C sinks.":"Walking.");}
   function setPalette(v){paletteShown=v;showMouseMode();wrap.querySelector("#h3bar").hidden=!v;wrap.querySelector("#h3palbtn").classList.toggle("on",v);
