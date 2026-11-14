@@ -2155,7 +2155,7 @@ function open3D(){
   chain=[];
   const wrap=document.createElement("div");wrap.className="view3d";
   wrap.innerHTML=`<div class="hud"><span class="t">3D</span>
-    <button class="btn" id="h3fly" title="Fly through walls (F)">Fly</button><button class="btn" id="h3doors" title="Show doors and lifts open or as they start (O)">Doors: start</button><button class="btn" id="h3palbtn" title="Show or hide the texture palette (P)">Palette</button>
+    <button class="btn" id="h3mouse" title="Lock the mouse to look around (M). Or hold the right mouse button.">Mouse look</button><button class="btn" id="h3fly" title="Fly through walls (F)">Fly</button><button class="btn" id="h3doors" title="Show doors and lifts open or as they start (O)">Doors: start</button><button class="btn" id="h3palbtn" title="Show or hide the texture palette (P)">Palette</button>
     <button class="btn" id="h3start">Back to start</button><button class="btn" id="h3shapes" hidden>Load Shapes…</button>
     <span style="flex:1"></span><span id="h3pos"></span><button class="btn" id="h3close">Close</button>
     <div class="help" id="h3help"></div></div>
@@ -2282,9 +2282,16 @@ function open3D(){
     openSurfaceDialog(aim,()=>{refresh();});}
   let dirty=false,lastAim;
   function setFly(v){fly=v;wrap.querySelector("#h3fly").classList.toggle("on",v);status(v?"Flying: walls don't stop you. R rises, C sinks.":"Walking.");}
-  function setPalette(v){paletteShown=v;wrap.querySelector("#h3bar").hidden=!v;wrap.querySelector("#h3palbtn").classList.toggle("on",v);
+  function setPalette(v){paletteShown=v;showMouseMode();wrap.querySelector("#h3bar").hidden=!v;wrap.querySelector("#h3palbtn").classList.toggle("on",v);
     wrap.querySelector("#h3pad").style.bottom=v?"calc(150px + env(safe-area-inset-bottom,0px))":"";if(v)renderPalette();updateAim();}
-  wrap.querySelector("#h3help").textContent="WASD / arrows move · click to look with the mouse (Esc frees it) · Shift runs · F flies · P paint mode (drag surfaces to slide textures) · Esc closes";
+  const helpEl=wrap.querySelector("#h3help"),mouseBtn=wrap.querySelector("#h3mouse");
+  // which way the mouse works right now, always shown in the top bar
+  function showMouseMode(){const locked=document.pointerLockElement===cv;mouseBtn.classList.toggle("on",locked);mouseBtn.textContent=locked?"Mouse look: on":"Mouse look";
+    helpEl.textContent=(locked?"Mouse look is on: the crosshair "+(paletteShown?"paints and drags":"aims")+" · M or Esc frees the mouse":"Hold the right mouse button to look around · M locks mouse look"+(paletteShown?" · left-click paints, drag slides textures":" · drag to look"))
+      +" · WASD / arrows move · Shift runs · F flies · P paint mode · Esc closes";}
+  function lockMouse(on){try{if(on&&document.pointerLockElement!==cv){const r=cv.requestPointerLock();if(r&&r.catch)r.catch(()=>{});}else if(!on&&document.pointerLockElement)document.exitPointerLock();}catch(_){}}
+  mouseBtn.onclick=()=>lockMouse(document.pointerLockElement!==cv);
+  document.addEventListener("pointerlockchange",showMouseMode);
   const shBtn=wrap.querySelector("#h3shapes");shBtn.hidden=realTextures();shBtn.onclick=()=>{try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}openShapesDialog(false);};
   const onShapes=()=>{mats.forEach(m=>{m.map.dispose();m.dispose();});mats.clear();build();shBtn.hidden=realTextures();if(paletteShown)renderPalette();};
   window.addEventListener("forge-shapes",onShapes);
@@ -2292,6 +2299,7 @@ function open3D(){
     if((e.ctrlKey||e.metaKey)&&k==="z"){e.preventDefault();e.shiftKey?redo():undo();refresh();return;}
     if(k==="escape"){if(document.pointerLockElement)return;close();return;}
     if(k===" "){e.preventDefault();if(!e.repeat)paint(e.shiftKey);return;}
+    if(k==="m"){lockMouse(document.pointerLockElement!==cv);return;}
     if(k==="f"){setFly(!fly);return;}if(k==="p"||k==="tab"){e.preventDefault();setPalette(!paletteShown);return;}
     if(k==="g"){grab();return;}if(k==="o"){wrap.querySelector("#h3doors").click();return;}
     if(k==="["||k==="]"){paintTex=clamp(paintTex+(k==="]"?1:-1),0,Math.max(0,texCountFor(paintCol)-1));renderPalette();return;}
@@ -2305,7 +2313,7 @@ function open3D(){
     if(["w","a","s","d","arrowup","arrowdown","arrowleft","arrowright","q","e","shift","r","c"].includes(k)){keys.add(k);e.preventDefault();}};
   const offKey=e=>{keys.delete(e.key.toLowerCase());if(e.key==="Shift")keys.delete("shift");};
   document.addEventListener("keydown",onKey,true);document.addEventListener("keyup",offKey);
-  let look=null,drag=null,dragDirty=false;
+  let look=null,drag=null,dragDirty=false,rlook=null;
   // Dragging in Paint mode, like Forge's visual mode: drag a surface to slide its texture; Shift+drag a floor or ceiling
   // to raise or lower it. A click without moving still paints. With the mouse locked, the surface under the crosshair moves.
   function startDrag(e,locked){const hit=surfAt(locked?null:e);if(!hit)return null;const sf=hit.sf,q=sf.poly;
@@ -2343,16 +2351,20 @@ function open3D(){
   cv.addEventListener("contextmenu",e=>e.preventDefault());
   cv.addEventListener("pointerdown",e=>{
     const locked=document.pointerLockElement===cv;
-    if(e.button===2){updateAim();editSurface();return;}
+    if(e.button===2){if(locked){updateAim();editSurface();return;}
+      rlook={x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,ev:e};cv.setPointerCapture(e.pointerId);return;}
     if(e.button===0&&e.altKey){updateAim();grab();return;}
     if(e.button===0&&paletteShown&&e.pointerType==="mouse"){drag=startDrag(e,locked);if(drag){e.preventDefault();if(!locked)cv.setPointerCapture(e.pointerId);return;}if(locked)return;}
     if(locked){if(e.button===0)paint(e.shiftKey);return;}
     look={x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,touch:e.pointerType!=="mouse"};cv.setPointerCapture(e.pointerId);});
   cv.addEventListener("pointermove",e=>{
+    if(rlook){st.yaw+=(e.clientX-rlook.x)*0.005;st.pitch=clamp(st.pitch-(e.clientY-rlook.y)*0.005,-1.3,1.3);rlook.x=e.clientX;rlook.y=e.clientY;return;}
     if(drag){const locked=document.pointerLockElement===cv;moveDrag(drag,locked?e.movementX:e.clientX-(drag.lx??drag.sx),locked?e.movementY:e.clientY-(drag.ly??drag.sy));drag.lx=e.clientX;drag.ly=e.clientY;return;}
     if(document.pointerLockElement===cv){st.yaw+=e.movementX*0.0025;st.pitch=clamp(st.pitch-e.movementY*0.0025,-1.3,1.3);return;}
     if(!look)return;st.yaw+=(e.clientX-look.x)*0.005;st.pitch=clamp(st.pitch-(e.clientY-look.y)*0.005,-1.3,1.3);look.x=e.clientX;look.y=e.clientY;});
-  cv.addEventListener("pointerup",e=>{if(drag){const d=drag;drag=null;endDrag(d);return;}const l=look;look=null;if(!l)return;
+  cv.addEventListener("pointerup",e=>{if(rlook&&e.button===2){const r=rlook;rlook=null;
+      if(Math.hypot(e.clientX-r.sx,e.clientY-r.sy)<6){const hit=surfAt(e);if(hit){aim=hit.sf;editSurface();}}return;}
+    if(drag){const d=drag;drag=null;endDrag(d);return;}const l=look;look=null;if(!l)return;
     if(Math.hypot(e.clientX-l.sx,e.clientY-l.sy)<6&&!l.touch&&cv.requestPointerLock){try{const r=cv.requestPointerLock();if(r&&r.catch)r.catch(()=>{});}catch(_){}}});
   const pad=wrap.querySelector("#h3pad");const padKeys={f:"w",b:"s",l:"arrowleft",r:"arrowright"};
   pad.querySelectorAll("button[data-k]").forEach(b=>{const k=padKeys[b.dataset.k];b.addEventListener("pointerdown",e=>{e.preventDefault();keys.add(k);b.setPointerCapture(e.pointerId);});const up=()=>keys.delete(k);b.addEventListener("pointerup",up);b.addEventListener("pointercancel",up);});
@@ -2387,7 +2399,7 @@ function open3D(){
     const q=polyAtPoint(st);posEl.textContent=`x ${(st.x/WU).toFixed(2)} y ${(st.y/WU).toFixed(2)} · ${q?"polygon "+doc.polys.indexOf(q):"outside"}`;
     raf=requestAnimationFrame(frame);}
   raf=requestAnimationFrame(frame);
-  function close(){cancelAnimationFrame(raf);document.removeEventListener("keydown",onKey,true);document.removeEventListener("keyup",offKey);window.removeEventListener("resize",size);window.removeEventListener("forge-shapes",onShapes);
+  function close(){cancelAnimationFrame(raf);document.removeEventListener("pointerlockchange",showMouseMode);document.removeEventListener("keydown",onKey,true);document.removeEventListener("keyup",offKey);window.removeEventListener("resize",size);window.removeEventListener("forge-shapes",onShapes);
     try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}
     for(const g of geos)g.dispose();for(const s of sprites){s.material.map.dispose();s.material.dispose();}
     disposables.forEach(d=>d.dispose&&d.dispose());renderer.dispose();wrap.remove();view3d=null;if(dirty){changed();status("Surfaces painted in 3D. Export to see them in Aleph One.");}}
