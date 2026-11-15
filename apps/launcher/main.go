@@ -25,6 +25,9 @@ var page []byte
 
 const threeURL = "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"
 
+// Set at build time from forge.rc (build.sh); shown in the window title.
+var version = "dev"
+
 // A fixed port keeps the same browser origin every run, so the Shapes you load and your
 // settings (kept in the browser's storage) are still there next time.
 var ports = []int{47811, 47812, 47813}
@@ -78,16 +81,44 @@ func three(w http.ResponseWriter, r *http.Request) {
 }
 
 func listen() (net.Listener, int, error) {
-	for _, p := range ports {
+	// the first port is the one that keeps your Shapes and settings: give a stopped copy a moment to let go of it
+	for i := 0; i < 15; i++ {
+		if l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", ports[0])); err == nil {
+			return l, ports[0], nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	for _, p := range ports[1:] {
 		if l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p)); err == nil {
+			logf("port %d busy, using %d (settings and Shapes there are separate)", ports[0], p)
 			return l, p, nil
 		}
 	}
 	return nil, 0, errors.New("no free port")
 }
 
+// stopOldCopies ends any other Forge.exe still running (an older copy keeps serving the
+// editor while its window is open). Without this a new copy moves to the next port, which is
+// a different browser origin, so the Shapes and settings you loaded seem to be gone.
+func stopOldCopies() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	exe := filepath.Base(os.Args[0])
+	if exe == "" {
+		exe = "Forge.exe"
+	}
+	cmd := exec.Command("taskkill", "/F", "/IM", exe, "/FI", fmt.Sprintf("PID ne %d", os.Getpid()))
+	hideWindow(cmd)
+	if out, err := cmd.CombinedOutput(); err == nil {
+		logf("stopped older copies: %s", strings.TrimSpace(string(out)))
+	}
+}
+
 func main() {
+	stopOldCopies()
 	html := strings.Replace(string(page), threeURL, "/three.min.js", 1)
+	html = strings.Replace(html, "<title>Forge Remake</title>", "<title>Forge+ "+version+"</title>", 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/three.min.js", three)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -108,7 +139,7 @@ func main() {
 	}
 	url := fmt.Sprintf("http://127.0.0.1:%d/", port)
 	go http.Serve(l, mux)
-	logf("serving on %s", url)
+	logf("Forge+ %s serving on %s", version, url)
 	if os.Getenv("FORGEPLUS_NO_WINDOW") != "" {
 		select {}
 	}
