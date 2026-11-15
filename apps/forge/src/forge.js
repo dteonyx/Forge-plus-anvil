@@ -2155,11 +2155,13 @@ function open3D(){
   chain=[];
   const wrap=document.createElement("div");wrap.className="view3d";
   wrap.innerHTML=`<div class="hud"><span class="t">3D</span>
-    <button class="btn" id="h3mouse" title="Lock the mouse to look around (M). Or hold the right mouse button.">Mouse look</button><button class="btn" id="h3fly" title="Fly through walls (F)">Fly</button><button class="btn" id="h3doors" title="Show doors and lifts open or as they start (O)">Doors: start</button><button class="btn" id="h3palbtn" title="Show or hide the texture palette (P)">Palette</button>
+    <button class="btn" id="h3mouse" title="Lock the mouse to look around (M). Or hold the right mouse button.">Mouse look</button><button class="btn" id="h3fly" title="Fly through walls (F)">Fly</button><button class="btn" id="h3doors" title="Doors and lifts work as in the game (E uses them), or hold them all open to look around (O)">Doors: working</button><button class="btn" id="h3palbtn" title="Show or hide the texture palette (P)">Palette</button>
     <button class="btn" id="h3start">Back to start</button><button class="btn" id="h3shapes" hidden>Load Shapes…</button>
     <span style="flex:1"></span><span id="h3pos"></span><button class="btn" id="h3close">Close</button>
     <div class="help" id="h3help"></div></div>
   <div class="crosshair" id="h3cross"></div>
+  <div id="h3msg" style="position:absolute;left:50%;top:62%;transform:translateX(-50%);padding:6px 12px;border-radius:6px;background:rgba(0,0,0,.65);color:#fff;font:13px/1.3 system-ui,sans-serif;pointer-events:none;z-index:6" hidden></div>
+  <div id="h3flash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s;z-index:5"></div>
   <div class="paintbar" id="h3bar">
     <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Click or Space paints · Shift+Space paints the whole room · mouse wheel or [ ] picks the texture · drag a surface to slide its texture (everything touching with the same texture moves and lines up; Ctrl moves one piece) · Shift+drag a floor or ceiling to raise or lower it · G or Alt-click picks up · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
       <span class="paintopts"><label>Set <select id="h3set"></select></label><label><input type="checkbox" id="h3applyTex"> Apply texture</label><label><input type="checkbox" id="h3applyLight"> Apply light</label><label>Light <input type="number" id="h3light" min="0" max="100" step="5"> %</label></span></div>
@@ -2213,12 +2215,23 @@ function open3D(){
           for(let i=0;i<im.data.length;i+=4){const v=Math.random()*255|0;im.data[i]=im.data[i+1]=im.data[i+2]=v;im.data[i+3]=255;}g.putImageData(im,0,0);t.needsUpdate=true;break;}
       }}}
   let meshes=[],geos=[];const surfOf=new Map();let sprites=[];
+  // Moving platforms: the level is drawn as static meshes plus dynamic ones (platforms and the polygons next to them),
+  // and only the dynamic ones are redrawn while something moves
+  let statMeshes=[],dynMeshes=[],dynPolys=[],edgeOwner=new Map();
+  function dropMeshes(list){for(const m of list){scene.remove(m);m.geometry.dispose();surfOf.delete(m);}}
   function build(){
-    for(const m of meshes)scene.remove(m);for(const g of geos)g.dispose();meshes=[];geos=[];surfOf.clear();
+    dropMeshes(statMeshes);dropMeshes(dynMeshes);statMeshes=[];dynMeshes=[];geos=[];
     for(const s of sprites){scene.remove(s);s.material.map.dispose();s.material.dispose();}sprites=[];
+    edgeOwner=new Map();doc.polys.forEach((q,i)=>q.verts.forEach((v,k)=>edgeOwner.set(sideKey(v,q.verts[(k+1)%q.verts.length]),i)));
+    const dyn=new Set();for(const q of plats.keys()){dyn.add(q);q.verts.forEach((v,k)=>{const oi=edgeOwner.get(sideKey(q.verts[(k+1)%q.verts.length],v));if(oi!=null)dyn.add(doc.polys[oi]);});}
+    dynPolys=doc.polys.filter(q=>dyn.has(q));
+    statMeshes=emit(doc.polys.filter(q=>!dyn.has(q)));dynMeshes=emit(dynPolys);meshes=statMeshes.concat(dynMeshes);
+    for(const o of doc.objs){const q=polyAtPoint(o);if(!q)continue;const s=spriteFor(o);const size=o.kind===2?0.35:0.6;s.scale.set(size,size,1);s.position.set(o.x*S,(hNow(q).floor+(o.z||0))*S+size/2,o.y*S);scene.add(s);sprites.push(s);}
+  }
+  function rebuildDyn(){dropMeshes(dynMeshes);dynMeshes=emit(dynPolys);meshes=statMeshes.concat(dynMeshes);}
+  function emit(polys){
     const groups=new Map();const SHOWN=new Set([2,4,5,6,7,9,15,16,17,18,19,20]);const grp=(b,col,clut,kind="",xf=0)=>{const key=`${b}:${col??""}:${clut|0}:${kind}:${SHOWN.has(xf|0)?xf|0:0}`;if(!groups.has(key))groups.set(key,{b:key,pos:[],uv:[],col:[],surf:[]});return groups.get(key);};
-    const PI=platformInfo(doc);const H=q=>{const r=PI.get(q);return r&&!openDoors?{floor:r.floor,ceil:r.ceil}:r&&openDoors?{floor:r.minF,ceil:r.maxC}:q;};
-    const edgeOwner=new Map();doc.polys.forEach((q,i)=>q.verts.forEach((v,k)=>edgeOwner.set(sideKey(v,q.verts[(k+1)%q.verts.length]),i)));
+    const H=hNow;
     const lv=p=>0.2+0.8*p/100;
     function quad(q,a,b,y0,y1,part,orient){
       if(y1-y0<1)return;const t=part==="trans"?((sideGet(a,b)||{}).trans):wallTex(q,a,b,part);if(!t)return;const g=grp(t.b,t.col,t.clut,part==="trans"?"t":"",t.xfer);const len=Math.hypot(b.x-a.x,b.y-a.y);const shade=lv(t.light??q.light)*orient;
@@ -2227,7 +2240,7 @@ function open3D(){
       const U=[[u0,vb],[u1,vb],[u1,vt],[u0,vt]];
       for(const i of [0,1,2,0,2,3]){g.pos.push(...P[i]);g.uv.push(U[i][0],U[i][1]+1);g.col.push(shade,shade,shade);}
       const sf={kind:"wall",poly:q,a,b,part,corners:P};g.surf.push(sf,sf);}
-    doc.polys.forEach(q0=>{
+    polys.forEach(q0=>{
       const q=q0,h=H(q0),F=h.floor,C=h.ceil;
       const fl=lv(q.flight??q.light),cl=lv(q.clight??q.light)*0.9;
       const fg=grp(q.ftex,q.fcol,q.fclut,"",q.fxfer),cg=grp(q.ctex,q.ccol,q.cclut,"",q.cxfer);const fs={kind:"floor",poly:q},cs={kind:"ceil",poly:q};
@@ -2243,12 +2256,49 @@ function open3D(){
         else{if(o.floor>F)quad(q,a,b,F,Math.min(o.floor,C),"lower",orient);if(o.ceil<C)quad(q,a,b,Math.max(o.ceil,F),C,"upper",orient);
           if((sideGet(a,b)||{}).trans)quad(q,a,b,Math.max(o.floor,F),Math.min(o.ceil,C),"trans",orient);}});
     });
+    const out=[];
     for(const g of groups.values()){const geo=new THREE.BufferGeometry();geo.setAttribute("position",new THREE.Float32BufferAttribute(g.pos,3));geo.setAttribute("uv",new THREE.Float32BufferAttribute(g.uv,2));geo.setAttribute("color",new THREE.Float32BufferAttribute(g.col,3));
-      const mesh=new THREE.Mesh(geo,matFor(g.b));scene.add(mesh);meshes.push(mesh);geos.push(geo);surfOf.set(mesh,g.surf);}
-    for(const o of doc.objs){const q=polyAtPoint(o);if(!q)continue;const s=spriteFor(o);const size=o.kind===2?0.35:0.6;s.scale.set(size,size,1);s.position.set(o.x*S,(q.floor+(o.z||0))*S+size/2,o.y*S);scene.add(s);sprites.push(s);}
+      const mesh=new THREE.Mesh(geo,matFor(g.b));scene.add(mesh);out.push(mesh);surfOf.set(mesh,g.surf);}
+    return out;
   }
-  let openDoors=false;let PInow=platformInfo(doc);
-  const hNow=q=>{const r=PInow.get(q);return r?(openDoors?{floor:r.minF,ceil:r.maxC}:{floor:r.floor,ceil:r.ceil}):q;};
+  // ===== doors, lifts, switches, triggers and teleporters, run like Aleph One (30 ticks a second) =====
+  // Heights are in internal units (1024 = 1 WU); a platform's speed is units per tick and its delay is ticks.
+  let openDoors=false;let PInow=platformInfo(doc);let plats=new Map();
+  const has=(p,b)=>!!(p.F&(1<<b));
+  function initPlats(keep){PInow=platformInfo(doc);const old=plats;plats=new Map();
+    const owner=new Map();doc.polys.forEach(q=>q.verts.forEach((v,k)=>owner.set(sideKey(v,q.verts[(k+1)%q.verts.length]),q)));
+    for(const [q,r] of PInow){const pf={...PLAT_DEFAULT(),...(q.plat||{})};const F=pf.flags>>>0;const p={q,r,F,speed:Math.max(1,pf.speed|0),delay:Math.max(0,pf.delay|0),tag:pf.tag|0,initExt:!!(F&2),nbrs:[]};
+      const o=keep&&old.get(q);
+      if(o){p.floor=clamp(o.floor,r.minF,r.maxF);p.ceil=clamp(o.ceil,r.minC,r.maxC);p.active=o.active;p.ext=o.ext;p.wait=o.wait;p.used=o.used;}
+      else{p.floor=r.floor;p.ceil=r.ceil;p.active=has(p,0);p.ext=!p.initExt;p.wait=p.active&&has(p,18)?p.delay:0;p.used=p.active;}
+      plats.set(q,p);}
+    for(const p of plats.values())p.q.verts.forEach((v,k)=>{const o=owner.get(sideKey(p.q.verts[(k+1)%p.q.verts.length],v));const n=o&&plats.get(o);if(n&&!p.nbrs.includes(n))p.nbrs.push(n);});}
+  const hNow=q=>{const p=plats.get(q);if(!p)return q;return openDoors?{floor:p.r.minF,ceil:p.r.maxC}:{floor:p.floor,ceil:p.ceil};};
+  function platActivate(p,parent){if(p.active||(has(p,10)&&p.used))return false;p.active=true;p.used=true;p.parent=parent||null;p.wait=has(p,18)?p.delay:0;
+    if(has(p,19))for(const n of p.nbrs)if(!(has(p,9)&&n===p.parent))platActivate(n,p);
+    if(has(p,20))for(const n of p.nbrs)platDeactivate(n);return true;}
+  function platDeactivate(p){if(!p.active)return;p.active=false;
+    if(has(p,4))for(const n of p.nbrs)if(!(has(p,9)&&n===p.parent))platActivate(n,p);
+    if(has(p,21))for(const n of p.nbrs)platDeactivate(n);}
+  // a switch or trigger: starts a stopped platform, stops a running one (unless it can't be stopped by switches)
+  function platToggle(p){if(!p)return;if(p.active){if(!has(p,16))platDeactivate(p);}else platActivate(p);}
+  const toward=(v,t,d)=>v<t?Math.min(t,v+d):Math.max(t,v-d);
+  function platTick(){let moved=false;const inQ=fly?null:polyAtPoint(st);
+    for(const p of plats.values()){if(!p.active)continue;if(p.wait>0){p.wait--;continue;}
+      const r=p.r,tf=p.ext?r.maxF:r.minF,tc=p.ext?r.minC:r.maxC;
+      const d=(!p.ext&&has(p,22))?Math.max(1,p.speed>>2):p.speed;
+      const nf=toward(p.floor,tf,d),nc=toward(p.ceil,tc,d);
+      if(inQ===p.q&&nc-Math.max(nf,st.feet)<BODY&&(nc<p.ceil||nf>p.floor)){ // the player is in the way
+        if(has(p,15)){p.ext=!p.ext;continue;}if(!has(p,8))continue;}
+      if(nf!==p.floor||nc!==p.ceil)moved=true;
+      p.floor=nf;p.ceil=nc;if(inQ===p.q&&st.feet<nf)st.feet=nf; // ride it up
+      if(nf===tf&&nc===tc){const reachedExt=p.ext;p.ext=!p.ext;p.wait=p.delay;
+        if(has(p,23))for(const n of p.nbrs)if(!(has(p,9)&&n===p.parent))platActivate(n,p);
+        if(has(p,2)||(has(p,3)&&reachedExt===p.initExt))platDeactivate(p);}}
+    return moved;}
+  let tickAcc=0;
+  function runPlats(dt){if(openDoors||!plats.size)return;tickAcc=Math.min(tickAcc+dt*30,8);let moved=false;while(tickAcc>=1){tickAcc--;if(platTick())moved=true;}if(moved)rebuildDyn();}
+  initPlats(false);
   build();
   const hlGeo=new THREE.BufferGeometry();const hl=new THREE.LineLoop(hlGeo,new THREE.LineBasicMaterial({color:0xffb040,depthTest:false}));hl.renderOrder=10;hl.visible=false;scene.add(hl);disposables.push(hlGeo,hl.material);
   const ray=new THREE.Raycaster();let aim=null;const center=new THREE.Vector2(0,0);
@@ -2262,6 +2312,46 @@ function open3D(){
   const st={x:0,y:0,feet:0,yaw:0,pitch:0,vy:0};let fly=false;
   function reset(){st.x=start.x;st.y=start.y;const q=polyAtPoint(start);st.feet=q?q.floor:0;st.yaw=(start.facing||0)*Math.PI/180;st.pitch=0;st.vy=0;}
   reset();
+  let curPoly=polyAtPoint(st);
+  const msgEl=wrap.querySelector("#h3msg"),flashEl=wrap.querySelector("#h3flash");let msgT=0;
+  function say(m){msgEl.textContent=m;msgEl.hidden=false;clearTimeout(msgT);msgT=setTimeout(()=>msgEl.hidden=true,2600);}
+  // stepping into a polygon: lifts start, platform triggers fire, teleporters send you on
+  let teleporting=false;
+  function entered(q){const p=plats.get(q);
+    if(p&&has(p,13)&&!has(p,26)&&!has(p,24)&&!p.active)platActivate(p);
+    if(q.type===7||q.type===9){const t=plats.get(doc.polys[q.perm]);if(t){if(q.type===7)platActivate(t);else if(!has(t,16))platDeactivate(t);}}
+    if(q.type===10&&!teleporting){
+      if(q.perm>=0){const t=doc.polys[q.perm];if(!t){say(`This teleporter points at polygon ${q.perm}, which doesn't exist`);return;}
+        teleporting=true;flashEl.style.opacity="0.85";
+        setTimeout(()=>{const c=centroid(t.verts);st.x=c.x;st.y=c.y;st.feet=hNow(t).floor;st.vy=0;curPoly=polyAtPoint(st);flashEl.style.opacity="0";
+          setTimeout(()=>teleporting=false,300);},250);}
+      else say(`Teleporter to level ${-1-q.perm} (other levels aren't followed in 3D)`);}
+    if(q.type===18)say("Automatic exit: the level ends here in the game");}
+  // E: use what's in front of you, like the action key in the game. The aimed surface wins; otherwise the nearest
+  // switch, then door or lift edge, within reach and roughly ahead (small recessed switches are hard to aim at exactly)
+  function action(){
+    const reach=1.25*WU;const hit=surfAt();let side=null,plat=null;
+    if(hit&&hit.dist<=reach*S&&hit.sf.kind==="wall"){const sf=hit.sf;
+      if((sideGet(sf.a,sf.b)||{}).panel)side=[sf.a,sf.b];
+      else{const oi=edgeOwner.get(sideKey(sf.b,sf.a));plat=plats.get(sf.poly)||(oi!=null?plats.get(doc.polys[oi]):null)||null;}}
+    if(!side&&!plat){const fx=Math.cos(st.yaw),fy=Math.sin(st.yaw);let bs=null,bsd=reach,bp=null,bpd=reach;
+      for(const q of doc.polys){const pq=plats.get(q);q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];
+        const t=clamp(((st.x-a.x)*(b.x-a.x)+(st.y-a.y)*(b.y-a.y))/(((b.x-a.x)**2+(b.y-a.y)**2)||1),0,1);const px=a.x+(b.x-a.x)*t,py=a.y+(b.y-a.y)*t;
+        const dx=px-st.x,dy=py-st.y,dd=Math.hypot(dx,dy);if(dd>reach||(dd>1&&(dx*fx+dy*fy)/dd<0.6))return;
+        if(dd<bsd&&(sideGet(a,b)||{}).panel){bs=[a,b];bsd=dd;}
+        if(pq&&dd<bpd&&q!==polyAtPoint(st)){bp=pq;bpd=dd;}});}
+      if(bs)side=bs;else if(bp)plat=bp;}
+    if(side){const pn=sideGet(side[0],side[1]).panel;const key=panelKeyOf(pn.type);
+      if(key==="platform"){const t=plats.get(doc.polys[pn.perm]);if(t){platToggle(t);say(`Switch: platform ${pn.perm} ${t.active?"started":"stopped"}`);}else say(`This switch points at polygon ${pn.perm}, which isn't a door or lift`);return;}
+      if(key==="tag"){const ts=[...plats.values()].filter(p=>p.tag===pn.perm&&pn.perm);ts.forEach(platToggle);say(ts.length?`Tag switch ${pn.perm}: ${ts.length} platform${ts.length>1?"s":""}`:`Tag switch ${pn.perm}: no platform uses this tag`);return;}
+      if(key==="terminal"){say(`Terminal ${pn.perm} (terminals aren't shown in 3D yet)`);return;}
+      if(key==="light"){say(`Light switch: light ${pn.perm} (lights don't change in 3D yet)`);return;}
+      const pl=panelList(doc.info.env).find(x=>x.type===pn.type);say(pl?pl.label:"Control panel");return;}
+    if(plat){usePlat(plat);return;}
+    const here=polyAtPoint(st);const p=here&&plats.get(here);if(p){usePlat(p);return;}
+    say("Nothing to use here");}
+  function usePlat(p){if(!has(p,13)){say("This only moves from a switch or trigger");return;}if(has(p,24)){say("It's locked");return;}
+    if(p.active){p.ext=!p.ext;p.wait=0;}else platActivate(p);}
   const keys=new Set();const EYE=0.66*WU,BODY=0.8*WU,STEP=0.3*WU;
   function canMove(nx,ny){
     if(fly)return Math.abs(nx)<MAXC&&Math.abs(ny)<MAXC;
@@ -2291,7 +2381,7 @@ function open3D(){
     if(s.kind==="floor"){q.ftex=b;delete q.fclut;if(col!=null)q.fcol=col;else delete q.fcol;if(sky)q.fxfer=XFER_LANDSCAPE;else if(q.fxfer===XFER_LANDSCAPE)q.fxfer=0;}
     else if(s.kind==="ceil"){q.ctex=b;delete q.cclut;if(col!=null)q.ccol=col;else delete q.ccol;if(sky)q.cxfer=XFER_LANDSCAPE;else if(q.cxfer===XFER_LANDSCAPE)q.cxfer=0;}
     else{const cur=(sideGet(s.a,s.b)||{})[s.part];const t={...(cur||{ox:0,oy:0}),b};delete t.col;delete t.clut;if(col!=null)t.col=col;if(sky)t.xfer=XFER_LANDSCAPE;else if(t.xfer===XFER_LANDSCAPE)delete t.xfer;sideSet(s.a,s.b,s.part,t);}}
-  function refresh(){dirty=true;PInow=platformInfo(doc);build();updateAim();lastAim=undefined;}
+  function refresh(){dirty=true;initPlats(true);build();updateAim();lastAim=undefined;}
   function applyLight(s,v){const q=s.poly;
     if(s.kind==="floor"){if(v===q.light&&q.clight==null&&q.fli==null)delete q.flight;else q.flight=v;delete q.fli;}
     else if(s.kind==="ceil"){if(v===q.light&&q.flight==null&&q.cli==null)delete q.clight;else q.clight=v;delete q.cli;}
@@ -2320,7 +2410,7 @@ function open3D(){
   // which way the mouse works right now, always shown in the top bar
   function showMouseMode(){const locked=document.pointerLockElement===cv;mouseBtn.classList.toggle("on",locked);mouseBtn.textContent=locked?"Mouse look: on":"Mouse look";
     helpEl.textContent=(locked?"Mouse look is on: the crosshair "+(paletteShown?"paints and drags":"aims")+" · M or Esc frees the mouse":"Hold the right mouse button to look around · M locks mouse look"+(paletteShown?" · left-click paints, drag slides textures":" · drag to look"))
-      +" · WASD / arrows move · Shift runs · F flies · P paint mode · Esc closes";}
+      +" · WASD / arrows move · E uses doors and switches · Shift runs · F flies · P paint mode · Esc closes";}
   function lockMouse(on){try{if(on&&document.pointerLockElement!==cv){const r=cv.requestPointerLock();if(r&&r.catch)r.catch(()=>{});}else if(!on&&document.pointerLockElement)document.exitPointerLock();}catch(_){}}
   mouseBtn.onclick=()=>lockMouse(document.pointerLockElement!==cv);
   document.addEventListener("pointerlockchange",showMouseMode);
@@ -2342,7 +2432,8 @@ function open3D(){
         else if(aim.kind==="ceil"){if(q.clight!=null){q.clight=clamp(q.clight+d,0,100);delete q.cli;}else{q.light=clamp(q.light+d,0,100);clearPolyLightIdx(q);}}
         else{const t=texOfSurf(aim);if(t.light!=null){const n={...t,light:clamp(t.light+d,0,100)};delete n.li;sideSet(aim.a,aim.b,aim.part,n);}else{q.light=clamp(q.light+d,0,100);clearPolyLightIdx(q);}}
         refresh();return;}}
-    if(["w","a","s","d","arrowup","arrowdown","arrowleft","arrowright","q","e","shift","r","c"].includes(k)){keys.add(k);e.preventDefault();}};
+    if(k==="e"){if(!e.repeat)action();return;}
+    if(["w","a","s","d","arrowup","arrowdown","arrowleft","arrowright","shift","r","c"].includes(k)){keys.add(k);e.preventDefault();}};
   const offKey=e=>{keys.delete(e.key.toLowerCase());if(e.key==="Shift")keys.delete("shift");};
   document.addEventListener("keydown",onKey,true);document.addEventListener("keyup",offKey);
   let look=null,drag=null,dragDirty=false,rlook=null;
@@ -2411,9 +2502,9 @@ function open3D(){
   pad.querySelectorAll("button[data-k]").forEach(b=>{const k=padKeys[b.dataset.k];b.addEventListener("pointerdown",e=>{e.preventDefault();keys.add(k);b.setPointerCapture(e.pointerId);});const up=()=>keys.delete(k);b.addEventListener("pointerup",up);b.addEventListener("pointercancel",up);});
   pad.querySelector('[data-a="paint"]').onclick=()=>{updateAim();paint(false);};pad.querySelector('[data-a="edit"]').onclick=()=>{updateAim();editSurface();};
   wrap.querySelector("#h3fly").onclick=()=>setFly(!fly);
-  const setDoors=v=>{openDoors=v;wrap.querySelector("#h3doors").textContent=v?"Doors: open":"Doors: start";wrap.querySelector("#h3doors").classList.toggle("on",v);build();updateAim();};
+  const setDoors=v=>{openDoors=v;wrap.querySelector("#h3doors").textContent=v?"Doors: all open":"Doors: working";wrap.querySelector("#h3doors").classList.toggle("on",v);build();updateAim();};
   wrap.querySelector("#h3doors").onclick=()=>setDoors(!openDoors);wrap.querySelector("#h3palbtn").onclick=()=>setPalette(!paletteShown);
-  wrap.querySelector("#h3start").onclick=reset;wrap.querySelector("#h3close").onclick=()=>close();
+  wrap.querySelector("#h3start").onclick=()=>{reset();initPlats(false);build();updateAim();};wrap.querySelector("#h3close").onclick=()=>close();
   function size(){const w=wrap.clientWidth,h=wrap.clientHeight;renderer.setSize(w,h,false);camera.aspect=w/h;camera.updateProjectionMatrix();}
   window.addEventListener("resize",size);size();
   setPalette(paletteShown);
@@ -2421,7 +2512,7 @@ function open3D(){
   function frame(now){
     const dt=Math.min(0.05,(now-last)/1000);last=now;
     const run=keys.has("shift")?2:1,spd=2.6*WU*run*dt;
-    if(keys.has("arrowleft")||keys.has("q"))st.yaw-=2.2*dt;if(keys.has("arrowright")||keys.has("e"))st.yaw+=2.2*dt;
+    if(keys.has("arrowleft"))st.yaw-=2.2*dt;if(keys.has("arrowright"))st.yaw+=2.2*dt;
     let fx=0,fy=0;const cy=Math.cos(st.yaw),sy=Math.sin(st.yaw);
     if(keys.has("w")||keys.has("arrowup")){fx+=cy;fy+=sy;}if(keys.has("s")||keys.has("arrowdown")){fx-=cy;fy-=sy;}
     if(keys.has("a")){fx+=sy;fy-=cy;}if(keys.has("d")){fx-=sy;fy+=cy;}
@@ -2432,6 +2523,8 @@ function open3D(){
     st.x=clamp(st.x,-MAXC,MAXC);st.y=clamp(st.y,-MAXC,MAXC);
     if(fly){if(keys.has("r"))st.feet+=spd;if(keys.has("c"))st.feet-=spd;}
     else{const q0=polyAtPoint(st);const q=q0?hNow(q0):null;if(q){if(st.feet<q.floor)st.feet=Math.min(q.floor,st.feet+4*WU*dt);else if(st.feet>q.floor){st.vy-=9*WU*dt;st.feet=Math.max(q.floor,st.feet+st.vy*dt);}if(st.feet<=q.floor)st.vy=0;}}
+    if(!fly){const nq=polyAtPoint(st);if(nq!==curPoly){curPoly=nq;if(nq)entered(nq);}}else curPoly=polyAtPoint(st);
+    runPlats(dt);
     camera.position.set(st.x*S,(st.feet+EYE)*S,st.y*S);
     const cp=Math.cos(st.pitch);camera.lookAt(camera.position.x+Math.cos(st.yaw)*cp,camera.position.y+Math.sin(st.pitch),camera.position.z+Math.sin(st.yaw)*cp);
     if(dragDirty){dragDirty=false;refresh();}
@@ -2442,9 +2535,9 @@ function open3D(){
   raf=requestAnimationFrame(frame);
   function close(){cancelAnimationFrame(raf);document.removeEventListener("pointerlockchange",showMouseMode);document.removeEventListener("keydown",onKey,true);document.removeEventListener("keyup",offKey);window.removeEventListener("resize",size);window.removeEventListener("forge-shapes",onShapes);
     try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}
-    for(const g of geos)g.dispose();for(const s of sprites){s.material.map.dispose();s.material.dispose();}
+    for(const m of meshes)m.geometry.dispose();for(const s of sprites){s.material.map.dispose();s.material.dispose();}
     disposables.forEach(d=>d.dispose&&d.dispose());renderer.dispose();wrap.remove();view3d=null;if(dirty){changed();status("Surfaces painted in 3D. Export to see them in Aleph One.");}}
-  view3d={close,build:refresh};
+  view3d={close,build:refresh,test:{plats:()=>plats,st,action,keys,surfAt,setYaw:v=>{st.yaw=v;st.pitch=0;},meshes:()=>meshes,curPoly:()=>curPoly}}; // test is for the headless tests
 }
 
 // =============================================================== scenario: several levels, pictures, physics
