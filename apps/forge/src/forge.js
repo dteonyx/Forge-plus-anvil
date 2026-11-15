@@ -3410,6 +3410,16 @@ restoreShapes().then(()=>{refreshShapesUI();let seen=false;try{seen=!!localStora
 requestAnimationFrame(()=>{resize();fitView();});
 // version, top right: stamped into the one-file builds (Forge.exe, the claude.ai artifact) from apps/launcher/forge.rc
 (()=>{const el=document.getElementById("appVersion");if(!el)return;const m=document.querySelector('meta[name="forge-version"]');el.textContent=m?"v"+m.content:"web";})();
+// In Forge.exe: if the program serving this page is a different version (a newer Forge.exe was started while this window
+// stayed open), save the level and reload, so the window always runs the Forge.exe that's installed.
+(()=>{const m=document.querySelector('meta[name="forge-version"]');if(!m||!/^127\.0\.0\.1$|^localhost$/.test(location.hostname))return;
+  let busy=false;const check=async()=>{if(busy||document.hidden)return;busy=true;
+    try{const r=await fetch("/forgeplus-version",{cache:"no-store"});if(r.ok){const v=(await r.text()).trim();
+      if(v&&v!==m.content){let done="";try{done=sessionStorage.getItem("forge-reloaded-for")||"";sessionStorage.setItem("forge-reloaded-for",v);}catch(e){}
+        if(done===v){busy=false;return;} // reload at most once per version, so a mismatched build can't loop
+        clearTimeout(scenTimer);try{await idb.put("scenario",serializeScenario());}catch(e){}location.replace(location.pathname+"?v="+encodeURIComponent(v));return;}}}catch(e){}
+    busy=false;};
+  setInterval(check,4000);window.addEventListener("focus",check);})();
 window.__forge={scenario,switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;changed();}};
 Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
   makePolygonFromCoords,addPointAt,addSegment,fillAt,objPoly,

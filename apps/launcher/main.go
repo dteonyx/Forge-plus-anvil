@@ -121,6 +121,13 @@ func main() {
 	html = strings.Replace(html, "<title>Forge Remake</title>", "<title>Forge+ "+version+"</title>", 1)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/three.min.js", three)
+	// the editor page asks this now and then; when it differs from the page's own version it saves and reloads,
+	// so a window left open from an older Forge.exe catches up by itself
+	mux.HandleFunc("/forgeplus-version", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Write([]byte(version))
+	})
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" && r.URL.Path != "/index.html" {
 			http.NotFound(w, r)
@@ -137,7 +144,8 @@ func main() {
 		openWindow(fmt.Sprintf("http://127.0.0.1:%d/", ports[0]), false)
 		return
 	}
-	url := fmt.Sprintf("http://127.0.0.1:%d/", port)
+	// the version in the address makes the browser open this build fresh instead of reusing an old window's page
+	url := fmt.Sprintf("http://127.0.0.1:%d/?v=%s", port, version)
 	go http.Serve(l, mux)
 	logf("Forge+ %s serving on %s", version, url)
 	if os.Getenv("FORGEPLUS_NO_WINDOW") != "" {
