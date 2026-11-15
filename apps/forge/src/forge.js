@@ -2476,13 +2476,15 @@ function open3D(){
       skip=sideKey(best.b,best.a);from=best.I;q=n2;}
     if(pick)return found.find(pick)||null;
     return found.find(o=>o.solid)||found[0]||null;}
+  // One see-through texture per line: it goes on the side facing you, and the other side's is taken off so the two never
+  // overlap (a double layer, like Bungie's grates, is two lines: use two polygons).
   function paintOpening(e){const o=openingAt(e);if(!o)return false;if(!paintApply.tex){status("Tick Apply texture first.");return true;}
-    pushUndo();const col=ownCol(paintCol);const same=t=>t&&t.b===paintTex&&(t.col??null)===(col??null);
-    const sides=[[o.a,o.b],[o.b,o.a]];const off=false;void same;
-    for(const [a,b] of sides){const sd=sideGet(a,b)||{};if(off){if(sd.trans)sideSet(a,b,"trans",null);}
-      else{const t={...(sd.trans||{ox:0,oy:0}),b:paintTex};delete t.col;delete t.clut;if(col!=null)t.col=col;sideSet(a,b,"trans",t);}}
-    refresh();const pa=doc.polys.indexOf(o.q),pb=doc.polys.indexOf(o.other);
-    status(off?`Took the see-through texture off the line between polygons ${pa} and ${pb}.`:`See-through texture ${paintTex} painted on the ${o.solid?"solid ":""}line between polygons ${pa} and ${pb} (both sides).`);return true;}
+    pushUndo();const col=ownCol(paintCol);const near=sideGet(o.a,o.b)||{},far=sideGet(o.b,o.a)||{};
+    const keep=near.trans||far.trans; // keep where it was slid to
+    const t={...(keep||{ox:0,oy:0}),b:paintTex};delete t.col;delete t.clut;if(col!=null)t.col=col;
+    if(!near.trans&&far.trans){t.ox=-(far.trans.ox||0);}
+    sideSet(o.a,o.b,"trans",t);if(far.trans)sideSet(o.b,o.a,"trans",null);
+    refresh();status(`See-through texture ${paintTex} painted on the ${o.solid?"solid ":""}line between polygons ${doc.polys.indexOf(o.q)} and ${doc.polys.indexOf(o.other)}, on the side facing you.`);return true;}
   // Delete: clear the see-through texture you're aiming at (or the first one through the opening), both sides
   function clearSeeThrough(){let a=null,b=null;
     if(aim&&aim.kind==="wall"&&aim.part==="trans"){a=aim.a;b=aim.b;}
