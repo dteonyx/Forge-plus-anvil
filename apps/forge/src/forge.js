@@ -2206,7 +2206,7 @@ function open3D(){
     const t=new THREE.CanvasTexture(cvs);t.magFilter=THREE.NearestFilter;t.minFilter=THREE.NearestMipmapLinearFilter;t.wrapS=t.wrapT=THREE.RepeatWrapping;
     const m=kind==="m"?new THREE.MeshBasicMaterial({color:0xffffff,map:t,vertexColors:true,side:THREE.DoubleSide,transparent:true,opacity:0.65,depthWrite:false})
       :xf===2?new THREE.MeshBasicMaterial({map:t,vertexColors:true,side:THREE.DoubleSide,transparent:true,opacity:0.25,depthWrite:false}) // Invisible: shown faintly so it can still be found
-      :new THREE.MeshBasicMaterial({map:t,vertexColors:true,side:THREE.DoubleSide,transparent:kind==="t",alphaTest:holes?0.5:0});mats.set(key,m);disposables.push(t,m);
+      :new THREE.MeshBasicMaterial({map:t,vertexColors:true,side:kind==="t"?THREE.FrontSide:THREE.DoubleSide,transparent:kind==="t",alphaTest:holes?0.5:0});mats.set(key,m);disposables.push(t,m);
     if(xf===4||xf===5||xf===6){ // Pulsate and wobble bend the texture in place (a gentle wave inside each tile, so nothing drifts)
       const k=xf===6?2:1;m.onBeforeCompile=sh=>{sh.uniforms.xT=xferTime;sh.fragmentShader="uniform float xT;\n"+sh.fragmentShader.replace("#include <map_fragment>",
         "#ifdef USE_MAP\nfloat ph=xT*6.2831853/64.0*"+k.toFixed(1)+";\n"+
@@ -2254,7 +2254,11 @@ function open3D(){
       const P=[[a.x*S,y0*S,a.y*S],[b.x*S,y0*S,b.y*S],[b.x*S,y1*S,b.y*S],[a.x*S,y1*S,a.y*S]];
       const u0=(t.ox||0)/WU,u1=(len+(t.ox||0))/WU,vt=-(t.oy||0)/WU,vb=-((y1-y0)+(t.oy||0))/WU;
       const U=[[u0,vb],[u1,vb],[u1,vt],[u0,vt]];
-      for(const i of [0,1,2,0,2,3]){g.pos.push(...P[i]);g.uv.push(U[i][0],U[i][1]+1);g.col.push(shade,shade,shade);}
+      // a see-through texture shows only from its own polygon (Aleph One): face it inward and draw it one-sided
+      let order=[0,1,2,0,2,3];if(part==="trans"){const c=centroid(q.verts);const ux=P[1][0]-P[0][0],uz=P[1][2]-P[0][2],vy=P[2][1]-P[0][1];
+        const nx=-uz*vy,nz=ux*vy; // (P1-P0)x(P2-P0), whose y part is 0
+        if(nx*(c.x*S-P[0][0])+nz*(c.y*S-P[0][2])<0)order=[0,2,1,0,3,2];}
+      for(const i of order){g.pos.push(...P[i]);g.uv.push(U[i][0],U[i][1]+1);g.col.push(shade,shade,shade);}
       const sf={kind:"wall",poly:q,a,b,part,corners:P};g.surf.push(sf,sf);}
     polys.forEach(q0=>{
       const q=q0,h=H(q0),F=h.floor,C=h.ceil;
@@ -2476,15 +2480,18 @@ function open3D(){
       skip=sideKey(best.b,best.a);from=best.I;q=n2;}
     if(pick)return found.find(pick)||null;
     return found.find(o=>o.solid)||found[0]||null;}
-  // One see-through texture per line: it goes on the side facing you, and the other side's is taken off so the two never
-  // overlap (a double layer, like Bungie's grates, is two lines: use two polygons).
+  // A see-through texture goes on both sides of the line, lined up with each other: Aleph One draws each side only from
+  // its own polygon, so a window needs both. Along the line each side's texture starts at its own end, so the far side's
+  // offset is worked out from the near side's (alignedFar) and the bars sit in the same place seen from either room.
+  const wrapWU=v=>((Math.round(v)%WU)+WU)%WU;
+  const lineLen=(a,b)=>Math.round(Math.hypot(b.x-a.x,b.y-a.y));
+  const alignedFar=(t,a,b)=>({...t,ox:wrapWU(-(t.ox||0)-lineLen(a,b)),oy:t.oy||0});
   function paintOpening(e){const o=openingAt(e);if(!o)return false;if(!paintApply.tex){status("Tick Apply texture first.");return true;}
     pushUndo();const col=ownCol(paintCol);const near=sideGet(o.a,o.b)||{},far=sideGet(o.b,o.a)||{};
-    const keep=near.trans||far.trans; // keep where it was slid to
-    const t={...(keep||{ox:0,oy:0}),b:paintTex};delete t.col;delete t.clut;if(col!=null)t.col=col;
-    if(!near.trans&&far.trans){t.ox=-(far.trans.ox||0);}
-    sideSet(o.a,o.b,"trans",t);if(far.trans)sideSet(o.b,o.a,"trans",null);
-    refresh();status(`See-through texture ${paintTex} painted on the ${o.solid?"solid ":""}line between polygons ${doc.polys.indexOf(o.q)} and ${doc.polys.indexOf(o.other)}, on the side facing you.`);return true;}
+    let base=near.trans||(far.trans?alignedFar(far.trans,o.b,o.a):null)||{ox:0,oy:0}; // keep where it was slid to
+    const t={...base,b:paintTex};delete t.col;delete t.clut;if(col!=null)t.col=col;
+    sideSet(o.a,o.b,"trans",t);sideSet(o.b,o.a,"trans",alignedFar(t,o.a,o.b));
+    refresh();status(`See-through texture ${paintTex} painted on the ${o.solid?"solid ":""}line between polygons ${doc.polys.indexOf(o.q)} and ${doc.polys.indexOf(o.other)}, both sides lined up.`);return true;}
   // Delete: clear the see-through texture you're aiming at (or the first one through the opening), both sides
   function clearSeeThrough(){let a=null,b=null;
     if(aim&&aim.kind==="wall"&&aim.part==="trans"){a=aim.a;b=aim.b;}
@@ -2574,8 +2581,9 @@ function open3D(){
     else if(sf.kind==="wall"){const ddx=Math.round(d.along*d.tx*W),ddy=Math.round(d.ty*W);
       if(d.run)for(const m of d.run){const t=wallTex(m.q,m.a,m.b,m.part);sideSet(m.a,m.b,m.part,{...t,ox:m.ox0-ddx,oy:m.oy0-ddy});}
       else{if(d.noTex){status("This line has no see-through texture yet: Shift+click to paint one.");return;}
-        if(!d.noNear){const t=texOfSurf(sf);sideSet(sf.a,sf.b,sf.part,{...t,ox:d.ox0-ddx,oy:d.oy0-ddy});}
-        if(d.far){const ft=(sideGet(sf.b,sf.a)||{}).trans;if(ft)sideSet(sf.b,sf.a,"trans",{...ft,ox:d.far.ox0+ddx,oy:d.far.oy0-ddy});}}
+        if(!d.noNear){const t=texOfSurf(sf);const nt={...t,ox:d.ox0-ddx,oy:d.oy0-ddy};sideSet(sf.a,sf.b,sf.part,nt);
+          if(sf.part==="trans"&&d.far){const ft=(sideGet(sf.b,sf.a)||{}).trans;if(ft)sideSet(sf.b,sf.a,"trans",{...ft,ox:wrapWU(-nt.ox-lineLen(sf.a,sf.b)),oy:nt.oy});}}
+        else if(d.far){const ft=(sideGet(sf.b,sf.a)||{}).trans;if(ft)sideSet(sf.b,sf.a,"trans",{...ft,ox:d.far.ox0+ddx,oy:d.far.oy0-ddy});}}
       status(`Texture offset ${((d.ox0-ddx)/WU).toFixed(3)}, ${((d.oy0-ddy)/WU).toFixed(3)} WU${d.run&&d.run.length>1?` · ${d.run.length} wall pieces in this run`:""}`);}
     else{const rx=-Math.sin(d.yaw),ry=Math.cos(d.yaw),fx=Math.cos(d.yaw),fy=Math.sin(d.yaw);
       const wx=(d.tx*rx-d.ty*fx)*W,wy=(d.tx*ry-d.ty*fy)*W;const k=sf.kind==="floor"?"f":"c"; // screen right = camera right; screen up = away from the camera
