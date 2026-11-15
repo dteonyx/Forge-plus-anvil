@@ -417,3 +417,29 @@ test("crossing lines don't cut each other, so polygons can overlap (Forge's 5D s
   assert.equal(r.polys, 2);
   assert.equal(r.objPoly, 0, "the item stays in polygon 0, not the overlapping one");
 });
+
+test("a door made in Forge+ exports with a texture on the walls that face it (its closed face)", async () => {
+  const { page } = app;
+  const r = await page.evaluate(() => {
+    const f = window.__forge, W = 1024;
+    f.setDoc(f.newDoc("inf"));
+    const mk = (cs, fl, ce) => { const q = f.makePolygonFromCoords(cs.map(([x, y]) => ({ x: x * W, y: y * W })), null); q.floor = fl * W; q.ceil = ce * W; return q; };
+    mk([[0, 0], [4, 0], [4, 4], [0, 4]], 0, 2);
+    const D = mk([[4, 1.5], [4.5, 1.5], [4.5, 2.5], [4, 2.5]], 0, 2); // stored open, as Forge+ keeps doors
+    mk([[4.5, 0], [8.5, 0], [8.5, 4], [4.5, 4]], 0, 2);
+    const B = (n) => 1 << n;
+    D.type = 5; D.plat = { type: 0, speed: 34, delay: 120, min: -1, max: -1, flags: B(1) | B(3) | B(5) | B(7) | B(13) | B(14) | B(15) | B(26), tag: 0 };
+    f.doc.objs.push({ kind: 3, sub: 0, x: 1 * W, y: 2 * W, z: 0, facing: 0, flags: 0 });
+    const di = f.doc.polys.indexOf(D);
+    const c = Object.fromEntries(f.buildMapChunks(f.doc).chunks.map(([t, x]) => [t, new DataView(x.buffer, x.byteOffset, x.byteLength)]));
+    const S = c.SIDS, L = c.LINS, out = [];
+    for (let i = 0; i < S.byteLength / 64; i++) {
+      const o = i * 64, tex = S.getUint16(o + 8), poly = S.getInt16(o + 48), line = S.getInt16(o + 50);
+      const cw = L.getInt16(line * 32 + 16), ccw = L.getInt16(line * 32 + 18);
+      if (poly !== di && (cw === di || ccw === di)) out.push(tex);
+    }
+    return out;
+  });
+  assert.equal(r.length, 2, "both rooms have a side facing the door");
+  for (const tex of r) assert.notEqual(tex, 0xffff, "the door's closed face has a texture");
+});

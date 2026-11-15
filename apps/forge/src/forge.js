@@ -652,7 +652,10 @@ function buildMapChunks(d=doc){
   const effP=q=>q.type===5&&PI.get(q)?{floor:PI.get(q).minF,ceil:PI.get(q).maxC}:q, effO=q=>q.type===5&&PI.get(q)?{floor:PI.get(q).maxF,ceil:PI.get(q).minC}:q;
   function sideType(p,o){if(!o)return 0;p=effP(p);o=effO(o);if(o.floor>=p.ceil||o.ceil<=p.floor)return 0;const lo=o.floor>p.floor,hi=o.ceil<p.ceil;return lo&&hi?4:hi?1:lo?2:0;}
   function newSide(pi,e,o,s){const p=polys[pi];const t=sideType(p,o);
-    const def={b:p.wtex,ox:0,oy:0};const visible=!o||t!==0||o.floor>=p.ceil||o.ceil<=p.floor;
+    // seen at all? Judge it at the platforms' furthest positions (a door closed, a lift at the end of its travel), not at the
+    // heights stored here: Forge+ keeps a door's open heights, so a closed door's face used to be saved with no texture
+    const pe=effP(p),oe=o?effO(o):null;
+    const def={b:p.wtex,ox:0,oy:0};const visible=!o||t!==0||oe.floor>=pe.ceil||oe.ceil<=pe.floor;
     const prim=!visible?null:t===0?(s.full||s.upper||s.lower||def):t===2?(s.lower||s.full||def):(s.upper||s.full||def);
     const sec=t===4?(s.lower||s.full||def):null;const tr=s.trans||null;
     const lt=x=>x?lidx(x.light??p.light,x.li??(x.light==null?p.wli:undefined)):lidx(p.light,p.fli);const pn=s.panel;
