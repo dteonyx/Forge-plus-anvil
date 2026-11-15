@@ -1929,7 +1929,10 @@ function texCountFor(col){if(isLandCol(col))return col===landCol()?landCount():(
 // The level's own set is stored as "no collection", so Bungie's maps still save byte-identical.
 const ownCol=c=>(c==null||c===17+doc.info.env)?null:c;
 function texSets(withSky){const out=envOptions(doc.info.game).map(([e,name])=>({col:e===doc.info.env?null:17+e,name:e===doc.info.env?`${name} (this level)`:name}));
-  out.sort((a,b)=>(a.col==null?-1:0)-(b.col==null?-1:0));if(withSky&&landCount())out.push({col:landCol(),name:`Sky: ${LANDSCAPES[landCol()-LANDSCAPE_COL]}`});return out;}
+  out.sort((a,b)=>(a.col==null?-1:0)-(b.col==null?-1:0));
+  // every sky, like every wall set: Aleph One loads each collection a level's surfaces use, landscapes included
+  if(withSky)for(let i=0;i<LANDSCAPES.length;i++){const c=LANDSCAPE_COL+i;if(texCountFor(c)>0)out.push({col:c,name:`Sky: ${LANDSCAPES[i]}${c===landCol()?" (this level)":""}`});}
+  return out;}
 function setName(col){if(col==null)return "";if(isLandCol(col))return "landscape";return envName(doc.info.game,col-17)+" ";}
 function landCol(){return LANDSCAPE_COL+clamp(doc.info.landscape|0,0,3);}
 // how many sky textures the level's landscape has: 0 when the Shapes file has none (Marathon 1), 1 stand-in without Shapes
@@ -2170,7 +2173,7 @@ function open3D(){
   <div id="h3msg" style="position:absolute;left:50%;top:62%;transform:translateX(-50%);padding:6px 12px;border-radius:6px;background:rgba(0,0,0,.65);color:#fff;font:13px/1.3 system-ui,sans-serif;pointer-events:none;z-index:6" hidden></div>
   <div id="h3flash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s;z-index:5"></div>
   <div class="paintbar" id="h3bar">
-    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Click or Space paints · Shift+click through an opening paints its see-through texture (windows, grates) · Shift+Space paints the whole room · mouse wheel or [ ] picks the texture · drag a surface to slide its texture (everything touching with the same texture moves and lines up; Ctrl moves one piece) · Shift+drag a floor or ceiling to raise or lower it · G or Alt-click picks up · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
+    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Click or Space paints · Shift+click through an opening paints its see-through texture (windows, grates), Delete clears it · Shift+Space paints the whole room · mouse wheel or [ ] picks the texture · drag a surface to slide its texture (everything touching with the same texture moves and lines up; Ctrl moves one piece) · Caps Lock + drag a floor or ceiling raises or lowers it · G or Alt-click picks up · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
       <span class="paintopts"><label>Set <select id="h3set"></select></label><label><input type="checkbox" id="h3applyTex"> Apply texture</label><label><input type="checkbox" id="h3applyLight"> Apply light</label><label>Light <input type="number" id="h3light" min="0" max="100" step="5"> %</label></span></div>
     <div class="palette" id="h3pal"></div></div>
   <div class="pad" id="h3pad"><button data-a="paint" aria-label="Paint">Paint</button><button data-k="f" aria-label="Forward">▲</button><button data-a="edit" aria-label="Edit surface">Edit</button><button data-k="l" aria-label="Turn left">◀</button><button data-k="b" aria-label="Back">▼</button><button data-k="r" aria-label="Turn right">▶</button></div>`;
@@ -2459,7 +2462,7 @@ function open3D(){
   // Shift+click (or Shift+Space) on an opening, like Forge: paints the see-through texture across the line you're looking
   // through, on both sides, e.g. a grate or window on a solid line. Follows the view ray out through openings and takes the
   // first solid line it passes (a window), else the first opening. The same texture again takes it off.
-  function openingAt(e){const r=new THREE.Vector2(0,0);if(e){const b=cv.getBoundingClientRect();r.set(((e.clientX-b.left)/b.width)*2-1,-((e.clientY-b.top)/b.height)*2+1);}
+  function openingAt(e,pick){const r=new THREE.Vector2(0,0);if(e){const b=cv.getBoundingClientRect();r.set(((e.clientX-b.left)/b.width)*2-1,-((e.clientY-b.top)/b.height)*2+1);}
     ray.setFromCamera(r,camera);const dv=ray.ray.direction,h2=Math.hypot(dv.x,dv.z);let q=here();if(!q||h2<1e-6)return null;
     const dx=dv.x/h2,dy=dv.z/h2,slope=dv.y/h2,eyeY=camera.position.y/S;const to={x:st.x+dx*256*WU,y:st.y+dy*256*WU};
     let from={x:st.x,y:st.y},skip=null;const found=[];
@@ -2471,6 +2474,7 @@ function open3D(){
       if(!(y>Math.max(h.floor,hn.floor)&&y<Math.min(h.ceil,hn.ceil)))break; // into a step or an overhang: that's a wall
       const l=findLine(best.a,best.b);found.push({q,other:n2,a:best.a,b:best.b,dist:best.d*S,solid:!!(l&&l.solid)});
       skip=sideKey(best.b,best.a);from=best.I;q=n2;}
+    if(pick)return found.find(pick)||null;
     return found.find(o=>o.solid)||found[0]||null;}
   function paintOpening(e){const o=openingAt(e);if(!o)return false;if(!paintApply.tex){status("Tick Apply texture first.");return true;}
     pushUndo();const col=ownCol(paintCol);const same=t=>t&&t.b===paintTex&&(t.col??null)===(col??null);
@@ -2479,6 +2483,12 @@ function open3D(){
       else{const t={...(sd.trans||{ox:0,oy:0}),b:paintTex};delete t.col;delete t.clut;if(col!=null)t.col=col;sideSet(a,b,"trans",t);}}
     refresh();const pa=doc.polys.indexOf(o.q),pb=doc.polys.indexOf(o.other);
     status(off?`Took the see-through texture off the line between polygons ${pa} and ${pb}.`:`See-through texture ${paintTex} painted on the ${o.solid?"solid ":""}line between polygons ${pa} and ${pb} (both sides).`);return true;}
+  // Delete: clear the see-through texture you're aiming at (or the first one through the opening), both sides
+  function clearSeeThrough(){let a=null,b=null;
+    if(aim&&aim.kind==="wall"&&aim.part==="trans"){a=aim.a;b=aim.b;}
+    else{const o=openingAt(null,o=>!!((sideGet(o.a,o.b)||{}).trans||(sideGet(o.b,o.a)||{}).trans));if(o){a=o.a;b=o.b;}}
+    if(!a){status(aim&&aim.kind==="wall"?"Walls always have a texture; paint another one over it. Delete clears see-through textures (windows, grates).":"Aim at a see-through texture (a window or grate) to clear it.");return;}
+    pushUndo();sideSet(a,b,"trans",null);sideSet(b,a,"trans",null);refresh();status("Cleared the see-through texture from that line (both sides).");}
   function grab(){if(!aim)return;const t=texOfSurf(aim);paintTex=t.b;paintCol=ownCol(t.col);paintLight=t.light??aim.poly.light;renderPalette();lightIn.value=paintLight;status(`Picked up ${isLandCol(paintCol)?"landscape":(paintCol!=null?setName(paintCol):"")+"texture"} ${paintTex} and light ${paintLight}%.`);}
   function nudge(dx,dy){if(!aim)return;const s=aim;pushUndo();
     if(s.kind==="floor"){s.poly.fox=(s.poly.fox||0)+dx;s.poly.foy=(s.poly.foy||0)+dy;}
@@ -2511,7 +2521,7 @@ function open3D(){
     if(k===" "){e.preventDefault();if(!e.repeat){if(e.shiftKey&&paletteShown){const o=openingAt(null),h=surfAt();if(o&&(!h||o.dist<=h.dist+0.02)){paintOpening(null);return;}}paint(e.shiftKey);}return;}
     if(k==="m"){lockMouse(document.pointerLockElement!==cv);return;}
     if(k==="f"){setFly(!fly);return;}if(k==="p"||k==="tab"){e.preventDefault();setPalette(!paletteShown);return;}
-    if(k==="g"){grab();return;}if(k==="o"){wrap.querySelector("#h3doors").click();return;}
+    if(k==="g"){grab();return;}if(k==="delete"||k==="backspace"){e.preventDefault();clearSeeThrough();return;}if(k==="o"){wrap.querySelector("#h3doors").click();return;}
     if(k==="["||k==="]"){paintTex=clamp(paintTex+(k==="]"?1:-1),0,Math.max(0,texCountFor(paintCol)-1));renderPalette();return;}
     if(aim){const step=e.shiftKey?128:32;
       if(k==="j"){nudge(-step,0);return;}if(k==="l"){nudge(step,0);return;}if(k==="i"){nudge(0,-step);return;}if(k==="k"){nudge(0,step);return;}
@@ -2525,13 +2535,15 @@ function open3D(){
   const offKey=e=>{keys.delete(e.key.toLowerCase());if(e.key==="Shift")keys.delete("shift");};
   document.addEventListener("keydown",onKey,true);document.addEventListener("keyup",offKey);
   let look=null,drag=null,dragDirty=false,rlook=null;
-  // Dragging in Paint mode, like Forge's visual mode: drag a surface to slide its texture; Shift+drag a floor or ceiling
+  // Dragging in Paint mode, like Forge's visual mode: drag a surface to slide its texture; with Caps Lock on, drag a floor or ceiling
   // to raise or lower it. A click without moving still paints. With the mouse locked, the surface under the crosshair moves.
   function startDrag(e,locked){const hit=surfAt(locked?null:e);if(!hit)return null;const sf=hit.sf,q=sf.poly;
     // world units per screen pixel at the surface's distance
     const wpp=2*hit.dist*Math.tan(camera.fov*Math.PI/360)/cv.clientHeight*WU;
     const d={sf,wpp,shift:e.shiftKey,moved:0,undo:false,sx:e.clientX,sy:e.clientY,yaw:st.yaw};
-    if(d.shift&&(sf.kind==="floor"||sf.kind==="ceil"))d.h0=sf.kind==="floor"?q.floor:q.ceil;
+    // Caps Lock on: dragging a floor or ceiling raises or lowers it (as in Forge's visual mode)
+    const caps=!!(e.getModifierState&&e.getModifierState("CapsLock"));
+    if(caps&&(sf.kind==="floor"||sf.kind==="ceil"))d.h0=sf.kind==="floor"?q.floor:q.ceil;
     else{const t=texOfSurf(sf);d.ox0=sf.kind==="floor"?q.fox||0:sf.kind==="ceil"?q.cox||0:t.ox||0;d.oy0=sf.kind==="floor"?q.foy||0:sf.kind==="ceil"?q.coy||0:t.oy||0;
       // Everything touching with the same texture moves and lines up as one (Ctrl moves just this piece). Walls line up
       // left to right from the grabbed piece (each starts where the last ended) and up and down by the height each hangs from.
@@ -2541,7 +2553,9 @@ function open3D(){
         for(let i=i0+1;i<run.length;i++)ox[i]=ox[i-1]+len(run[i-1]);for(let i=i0-1;i>=0;i--)ox[i]=ox[i+1]-len(run[i]);
         const top0=run[i0].top;d.run=run.map((m,i)=>({...m,ox0:i===i0?d.ox0:wrap(ox[i]),oy0:i===i0?d.oy0:wrap(d.oy0+(top0-m.top))}));}
       else if(sf.kind!=="wall"&&!one){const k=sf.kind==="floor"?"f":"c";d.flats=flatRun(q,k);}
-      if(sf.kind==="wall"){const rx=-Math.sin(st.yaw),ry=Math.cos(st.yaw),wx=sf.b.x-sf.a.x,wy=sf.b.y-sf.a.y,wl=Math.hypot(wx,wy)||1;d.along=Math.sign((wx*rx+wy*ry)/wl)||1;}}
+      if(sf.kind==="wall"){const rx=-Math.sin(st.yaw),ry=Math.cos(st.yaw),wx=sf.b.x-sf.a.x,wy=sf.b.y-sf.a.y,wl=Math.hypot(wx,wy)||1;d.along=Math.sign((wx*rx+wy*ry)/wl)||1;}
+      // a see-through texture on both sides of a line moves as one (the far side runs the other way along the line)
+      if(sf.part==="trans"&&!one){const ft=(sideGet(sf.b,sf.a)||{}).trans;if(ft)d.far={ox0:ft.ox||0,oy0:ft.oy||0};}}
     return d;}
   function moveDrag(d,dx,dy){d.moved+=Math.abs(dx)+Math.abs(dy);d.tx=(d.tx||0)+dx;d.ty=(d.ty||0)+dy;if(d.moved<6)return;
     if(!d.undo){pushUndo();d.undo=true;}const sf=d.sf,q=sf.poly,W=d.wpp;
@@ -2550,7 +2564,8 @@ function open3D(){
       status(`${sf.kind==="floor"?"Floor":"Ceiling"} of polygon ${doc.polys.indexOf(q)}: ${fmt(h)}`);}
     else if(sf.kind==="wall"){const ddx=Math.round(d.along*d.tx*W),ddy=Math.round(d.ty*W);
       if(d.run)for(const m of d.run){const t=wallTex(m.q,m.a,m.b,m.part);sideSet(m.a,m.b,m.part,{...t,ox:m.ox0-ddx,oy:m.oy0-ddy});}
-      else{const t=texOfSurf(sf);sideSet(sf.a,sf.b,sf.part,{...t,ox:d.ox0-ddx,oy:d.oy0-ddy});}
+      else{const t=texOfSurf(sf);sideSet(sf.a,sf.b,sf.part,{...t,ox:d.ox0-ddx,oy:d.oy0-ddy});
+        if(d.far){const ft=(sideGet(sf.b,sf.a)||{}).trans;if(ft)sideSet(sf.b,sf.a,"trans",{...ft,ox:d.far.ox0+ddx,oy:d.far.oy0-ddy});}}
       status(`Texture offset ${((d.ox0-ddx)/WU).toFixed(3)}, ${((d.oy0-ddy)/WU).toFixed(3)} WU${d.run&&d.run.length>1?` · ${d.run.length} wall pieces in this run`:""}`);}
     else{const rx=-Math.sin(d.yaw),ry=Math.cos(d.yaw),fx=Math.cos(d.yaw),fy=Math.sin(d.yaw);
       const wx=(d.tx*rx-d.ty*fx)*W,wy=(d.tx*ry-d.ty*fy)*W;const k=sf.kind==="floor"?"f":"c"; // screen right = camera right; screen up = away from the camera

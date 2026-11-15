@@ -346,11 +346,12 @@ test("any texture set can be used on any level, and it survives export", async (
     f.doc.info.env = 0;
     await f.installShapes("inf", "tiny", new Uint8Array(bytes).buffer, false);
   }, tinyShapes());
-  // the Set menu lists this level's set first, then the other wall sets in the Shapes file
+  // the Set menu lists this level's set first, then the other wall sets in the Shapes file, then every sky in it
   await page.evaluate(() => { const f = window.__forge; f.openSurfaceDialog({ kind: "floor", poly: f.doc.polys[0] }); });
   await page.locator("#dialog .texpick").first().click();
   const opts = await page.$$eval("#texSet option", (os) => os.map((o) => [o.value, o.textContent]));
-  assert.deepEqual(opts.map((o) => o[0]), ["", "18"]);
+  assert.deepEqual(opts.map((o) => o[0]), ["", "18", "27"]);
+  assert.match(opts[2][1], /^Sky: /);
   assert.match(opts[0][1], /this level/);
   await page.selectOption("#texSet", "18");
   assert.equal(await page.locator("#texPickGrid .texbtn").count(), 2);
