@@ -14,6 +14,10 @@ import re, sys, pathlib
 root = pathlib.Path(__file__).resolve().parent.parent
 kind, out = sys.argv[1], sys.argv[2]
 s = (root / "apps/forge/index.html").read_text()
+# the version number lives in apps/launcher/forge.rc (Forge.exe's version too); the editor shows it top right
+m = re.search(r'VALUE "ProductVersion", "([^"]+)"', (root / "apps/launcher/forge.rc").read_text())
+version = m.group(1) if m else "dev"
+s = s.replace("<title>Forge Remake</title>", '<title>Forge Remake</title>\n<meta name="forge-version" content="' + version + '">', 1)
 js = (root / "apps/forge/src/forge.js").read_text()
 tag = '<script type="module" src="./src/main.js"></script>'
 assert tag in s and "</script" not in js.lower()

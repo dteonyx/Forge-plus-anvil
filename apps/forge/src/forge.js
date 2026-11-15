@@ -3408,6 +3408,8 @@ status(legacy?"Restored your last level.":"Loaded the sample level “Cistern”
 (async()=>{try{const s=await idb.get("scenario");if(s){loadScenarioObject(JSON.parse(s));afterLoad(`Restored “${scenario.name}” (${scenario.levels.length} level${scenario.levels.length>1?"s":""}).`);fitView();}}catch(e){}})();
 restoreShapes().then(()=>{refreshShapesUI();let seen=false;try{seen=!!localStorage.getItem("forge-remake-setup");}catch(e){}if(!seen&&!GAME_IDS.some(g=>shapeStore[g])&&$("modal").hidden)openShapesDialog(true);});
 requestAnimationFrame(()=>{resize();fitView();});
+// version, top right: stamped into the one-file builds (Forge.exe, the claude.ai artifact) from apps/launcher/forge.rc
+(()=>{const el=document.getElementById("appVersion");if(!el)return;const m=document.querySelector('meta[name="forge-version"]');el.textContent=m?"v"+m.content:"web";})();
 window.__forge={scenario,switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;changed();}};
 Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
   makePolygonFromCoords,addPointAt,addSegment,fillAt,objPoly,
