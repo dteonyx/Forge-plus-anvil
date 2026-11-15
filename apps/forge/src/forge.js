@@ -2173,7 +2173,7 @@ function open3D(){
   const scene=new THREE.Scene();
   const sky=[[96,130,170],[14,16,30],[30,30,40],[2,2,8]][doc.info.landscape]||[0,0,0];
   scene.background=new THREE.Color(`rgb(${sky})`);scene.fog=new THREE.Fog(scene.background,6,40);
-  const camera=new THREE.PerspectiveCamera(75,1,0.05,200);
+  const camera=new THREE.PerspectiveCamera(75,1,0.01,200);
   const S=1/WU;
   const mats=new Map();const disposables=[];
   // transfer modes are shown live: each animated group has its own texture, moved every frame by animateXfers
@@ -2214,21 +2214,25 @@ function open3D(){
         case 7:{if(a.last===Math.floor(tk))break;a.last=Math.floor(tk);const g=a.cvs.getContext("2d"),im=g.createImageData(64,64);
           for(let i=0;i<im.data.length;i+=4){const v=Math.random()*255|0;im.data[i]=im.data[i+1]=im.data[i+2]=v;im.data[i+3]=255;}g.putImageData(im,0,0);t.needsUpdate=true;break;}
       }}}
-  let meshes=[],geos=[];const surfOf=new Map();let sprites=[];
-  // Moving platforms: the level is drawn as static meshes plus dynamic ones (platforms and the polygons next to them),
-  // and only the dynamic ones are redrawn while something moves
-  let statMeshes=[],dynMeshes=[],dynPolys=[],edgeOwner=new Map();
-  function dropMeshes(list){for(const m of list){scene.remove(m);m.geometry.dispose();surfOf.delete(m);}}
+  // Each polygon is its own group (its surfaces and the objects in it), so the view can be drawn polygon by polygon
+  // through the openings, like Aleph One (see renderPortals). Platforms and the polygons next to them are rebuilt while they move.
+  let meshes=[];const surfOf=new Map();let sprites=[];let groupOf=new Map(),objsIn=new Map();let seen=null; // seen: polygon -> view wedges it was drawn in
+  let dynPolys=[],edgeOwner=new Map();
+  function dropGroup(g){if(!g)return;scene.remove(g);if(g.parent)g.parent.remove(g);
+    for(const o of g.children){if(o.isMesh){o.geometry.dispose();surfOf.delete(o);}else if(o.isSprite){o.material.map.dispose();o.material.dispose();sprites=sprites.filter(x=>x!==o);}}}
+  function polyGroup(q){const g=new THREE.Group();g.userData.poly=q;for(const m of emit([q]))g.add(m);
+    for(const o of objsIn.get(q)||[]){const s=spriteFor(o);const size=o.kind===2?0.35:0.6;s.scale.set(size,size,1);s.position.set(o.x*S,(hNow(q).floor+(o.z||0))*S+size/2,o.y*S);s.renderOrder=3;g.add(s);sprites.push(s);}
+    scene.add(g);setDepth.dirty=true;return g;}
+  function collectMeshes(){meshes=[];for(const g of groupOf.values())for(const c of g.children)if(c.isMesh)meshes.push(c);}
   function build(){
-    dropMeshes(statMeshes);dropMeshes(dynMeshes);statMeshes=[];dynMeshes=[];geos=[];
-    for(const s of sprites){scene.remove(s);s.material.map.dispose();s.material.dispose();}sprites=[];
+    for(const g of groupOf.values())dropGroup(g);groupOf=new Map();sprites=[];
     edgeOwner=new Map();doc.polys.forEach((q,i)=>q.verts.forEach((v,k)=>edgeOwner.set(sideKey(v,q.verts[(k+1)%q.verts.length]),i)));
     const dyn=new Set();for(const q of plats.keys()){dyn.add(q);q.verts.forEach((v,k)=>{const oi=edgeOwner.get(sideKey(q.verts[(k+1)%q.verts.length],v));if(oi!=null)dyn.add(doc.polys[oi]);});}
     dynPolys=doc.polys.filter(q=>dyn.has(q));
-    statMeshes=emit(doc.polys.filter(q=>!dyn.has(q)));dynMeshes=emit(dynPolys);meshes=statMeshes.concat(dynMeshes);
-    for(const o of doc.objs){const q=objPoly(o);if(!q)continue;const s=spriteFor(o);const size=o.kind===2?0.35:0.6;s.scale.set(size,size,1);s.position.set(o.x*S,(hNow(q).floor+(o.z||0))*S+size/2,o.y*S);scene.add(s);sprites.push(s);}
+    objsIn=new Map();for(const o of doc.objs){const q=objPoly(o);if(!q)continue;if(!objsIn.has(q))objsIn.set(q,[]);objsIn.get(q).push(o);}
+    for(const q of doc.polys)groupOf.set(q,polyGroup(q));collectMeshes();
   }
-  function rebuildDyn(){dropMeshes(dynMeshes);dynMeshes=emit(dynPolys);meshes=statMeshes.concat(dynMeshes);}
+  function rebuildDyn(){for(const q of dynPolys){dropGroup(groupOf.get(q));groupOf.set(q,polyGroup(q));}collectMeshes();}
   function emit(polys){
     const groups=new Map();const SHOWN=new Set([2,4,5,6,7,9,15,16,17,18,19,20]);const grp=(b,col,clut,kind="",xf=0)=>{const key=`${b}:${col??""}:${clut|0}:${kind}:${SHOWN.has(xf|0)?xf|0:0}`;if(!groups.has(key))groups.set(key,{b:key,pos:[],uv:[],col:[],surf:[]});return groups.get(key);};
     const H=hNow;
@@ -2258,7 +2262,7 @@ function open3D(){
     });
     const out=[];
     for(const g of groups.values()){const geo=new THREE.BufferGeometry();geo.setAttribute("position",new THREE.Float32BufferAttribute(g.pos,3));geo.setAttribute("uv",new THREE.Float32BufferAttribute(g.uv,2));geo.setAttribute("color",new THREE.Float32BufferAttribute(g.col,3));
-      const mesh=new THREE.Mesh(geo,matFor(g.b));scene.add(mesh);out.push(mesh);surfOf.set(mesh,g.surf);}
+      const mesh=new THREE.Mesh(geo,matFor(g.b));const kind=g.b.split(":")[3];mesh.renderOrder=kind==="m"?2:kind==="t"?1:0;out.push(mesh);surfOf.set(mesh,g.surf);}
     return out;
   }
   // ===== doors, lifts, switches, triggers and teleporters, run like Aleph One (30 ticks a second) =====
@@ -2304,10 +2308,47 @@ function open3D(){
   const ray=new THREE.Raycaster();let aim=null;const center=new THREE.Vector2(0,0);
   // the surface (and distance) under a screen point; center of the screen when no event is given
   function surfAt(e){const p=new THREE.Vector2(0,0);if(e){const r=cv.getBoundingClientRect();p.set(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1);}
-    ray.setFromCamera(p,camera);const hit=ray.intersectObjects(meshes,false)[0];const sf=hit?surfOf.get(hit.object)[hit.faceIndex]:null;return sf&&sf.kind!=="media"?{sf,dist:hit.distance}:null;}
-  function updateAim(){ray.setFromCamera(center,camera);const hit=ray.intersectObjects(meshes,false)[0];
+    ray.setFromCamera(p,camera);const hit=firstSeen(ray.intersectObjects(meshes,false));const sf=hit?surfOf.get(hit.object)[hit.faceIndex]:null;return sf&&sf.kind!=="media"?{sf,dist:hit.distance}:null;}
+  function updateAim(){ray.setFromCamera(center,camera);const hit=firstSeen(ray.intersectObjects(meshes,false));
     aim=hit?surfOf.get(hit.object)[hit.faceIndex]:null;if(aim&&aim.kind==="media")aim=null;
     if(aim){hlGeo.setAttribute("position",new THREE.Float32BufferAttribute(aim.corners.flat(),3));hl.visible=paletteShown;}else hl.visible=false;}
+  // ===== drawing like Aleph One: start from the polygon you're in and draw only what shows through its openings =====
+  // Each polygon seen through an opening is drawn inside the wedge of view that the opening allows (two vertical clipping
+  // planes through the eye), farthest first, the polygon you're in last. A polygon that overlaps yours but isn't
+  // connected through an opening is never drawn: that's Forge's 5D space. Outside the map (flying) everything is drawn with depth.
+  const passScene=new THREE.Scene();passScene.fog=scene.fog;let depthOn=null;
+  function setDepth(on){if(depthOn===on&&!setDepth.dirty)return;depthOn=on;setDepth.dirty=false;
+    mats.forEach(m=>{m.depthTest=on;m.depthWrite=on;});for(const sp of sprites){sp.material.depthTest=on;sp.material.depthWrite=on;}}
+  const nrm=a=>{while(a<=-Math.PI)a+=2*Math.PI;while(a>Math.PI)a-=2*Math.PI;return a;};
+  function portalTree(root){const E={x:st.x,y:st.y};let count=0;
+    const ang=p=>Math.atan2(p.y-E.y,p.x-E.x);
+    function visit(q,win,depth){const inst={q,win,kids:[]};count++;if(depth>=64||count>1500)return inst;
+      const c=centroid(q.verts),h=hNow(q);
+      q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];const oi=edgeOwner.get(sideKey(b,a));if(oi==null)return;const n=doc.polys[oi];
+        if(depth>0){const ce=(b.x-a.x)*(E.y-a.y)-(b.y-a.y)*(E.x-a.x),cc=(b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);if(ce*cc<=0)return;} // looking out through it, not back in
+        const hn=hNow(n);if(Math.min(h.ceil,hn.ceil)-Math.max(h.floor,hn.floor)<=0)return; // closed (door shut, step to the ceiling)
+        const a1=ang(a),d=nrm(ang(b)-a1);const lo=d>=0?a1:a1+d,w=Math.abs(d);if(w<1e-6)return;
+        let nw;if(!win)nw={L:lo,W:w};else{const s0=nrm(lo-win.L);const from=Math.max(0,s0),to=Math.min(win.W,s0+w);if(to-from<1e-5)return;nw={L:win.L+from,W:to-from};}
+        inst.kids.push(visit(n,nw,depth+1));});
+      return inst;}
+    return visit(root,null,0);}
+  function wedgePlanes(win){const EX=st.x*S,EZ=st.y*S;const L=win.L,R=win.L+win.W;
+    const pl=(nx,nz)=>new THREE.Plane(new THREE.Vector3(nx,0,nz),-(nx*EX+nz*EZ));
+    return [pl(-Math.sin(L),Math.cos(L)),pl(Math.sin(R),-Math.cos(R))];}
+  const inWedge=(win,x,y)=>{if(!win)return true;const dx=x-st.x,dy=y-st.y;const L=win.L,R=win.L+win.W;
+    return Math.cos(L)*dy-Math.sin(L)*dx>=-1&&dx*Math.sin(R)-dy*Math.cos(R)>=-1;};
+  // a ray hit only counts if that polygon is drawn at that spot
+  function firstSeen(hits){if(!seen)return hits[0];for(const h of hits){const sf=surfOf.get(h.object)[h.faceIndex];const ws=sf&&seen.get(sf.poly);if(ws&&ws.some(w=>inWedge(w,h.point.x/S,h.point.z/S)))return h;}return null;}
+  function renderView(){
+    let root=fly?landPoly():here();if(root&&fly){const h=hNow(root),y=st.feet+EYE;if(y<h.floor||y>h.ceil)root=null;} // flying above or below the map
+    if(!root){seen=null;setDepth(true);renderer.clippingPlanes=[];renderer.render(scene,camera);return;}
+    setDepth(false);const tree=portalTree(root);seen=new Map();
+    renderer.autoClear=false;renderer.setClearColor(scene.background,1);renderer.clear(true,true,true);
+    const draw=inst=>{for(const k of inst.kids)draw(k);const g=groupOf.get(inst.q);if(!seen.has(inst.q))seen.set(inst.q,[]);seen.get(inst.q).push(inst.win);if(!g)return;
+      renderer.clippingPlanes=inst.win?wedgePlanes(inst.win):[];passScene.add(g);renderer.render(passScene,camera);scene.add(g);};
+    draw(tree);renderer.clippingPlanes=[];
+    if(hl.visible){passScene.add(hl);renderer.render(passScene,camera);scene.add(hl);}
+    renderer.autoClear=true;}
   const start=doc.objs.find(o=>o.kind===3&&objPoly(o))||(()=>{const c=centroid(doc.polys[0].verts);return {x:c.x,y:c.y,facing:0};})();
   const st={x:0,y:0,feet:0,yaw:0,pitch:0,vy:0};let fly=false;
   let curPoly=null;
@@ -2544,15 +2585,15 @@ function open3D(){
     const cp=Math.cos(st.pitch);camera.lookAt(camera.position.x+Math.cos(st.yaw)*cp,camera.position.y+Math.sin(st.pitch),camera.position.z+Math.sin(st.yaw)*cp);
     if(dragDirty){dragDirty=false;refresh();}
     updateAim();if(aim!==lastAim||drag){aimEl.textContent=describe(aim);lastAim=aim;}
-    animateXfers(now/1000);renderer.render(scene,camera);
+    animateXfers(now/1000);renderView();
     const q=here();posEl.textContent=`x ${(st.x/WU).toFixed(2)} y ${(st.y/WU).toFixed(2)} · ${q?"polygon "+doc.polys.indexOf(q):"outside"}`;
     raf=requestAnimationFrame(frame);}
   raf=requestAnimationFrame(frame);
   function close(){cancelAnimationFrame(raf);document.removeEventListener("pointerlockchange",showMouseMode);document.removeEventListener("keydown",onKey,true);document.removeEventListener("keyup",offKey);window.removeEventListener("resize",size);window.removeEventListener("forge-shapes",onShapes);
     try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}
-    for(const m of meshes)m.geometry.dispose();for(const s of sprites){s.material.map.dispose();s.material.dispose();}
+    for(const g of groupOf.values())dropGroup(g);
     disposables.forEach(d=>d.dispose&&d.dispose());renderer.dispose();wrap.remove();view3d=null;if(dirty){changed();status("Surfaces painted in 3D. Export to see them in Aleph One.");}}
-  view3d={close,build:refresh,test:{plats:()=>plats,st,action,keys,surfAt,setYaw:v=>{st.yaw=v;st.pitch=0;},meshes:()=>meshes,curPoly:()=>curPoly}}; // test is for the headless tests
+  view3d={close,build:refresh,test:{plats:()=>plats,st,action,keys,surfAt,setPoly:q=>{curPoly=q;},enter:q=>{curPoly=q;entered(q);},tree:()=>{const r=here();return r?portalTree(r):null;},setYaw:v=>{st.yaw=v;st.pitch=0;},meshes:()=>meshes,curPoly:()=>curPoly}}; // test is for the headless tests
 }
 
 // =============================================================== scenario: several levels, pictures, physics
