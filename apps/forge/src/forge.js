@@ -113,7 +113,8 @@ function remapPolyRefs(){
   if(!same){const now=new Map(doc.polys.map((q,i)=>[q,i]));const map=lastPolys.map(q=>now.has(q)?now.get(q):-1);
     const fix=v=>v>=0&&v<map.length?map[v]:v;
     for(const q of doc.polys)if([7,9,10].includes(q.type))q.perm=fix(q.perm);
-    for(const s of doc.sides.values())if(s.panel&&panelKeyOf(s.panel.type)==="platform")s.panel.perm=fix(s.panel.perm);}
+    for(const s of doc.sides.values())if(s.panel&&panelKeyOf(s.panel.type)==="platform")s.panel.perm=fix(s.panel.perm);
+    for(const o of doc.objs)if(o.pi!=null){o.pi=fix(o.pi);if(o.pi<0)delete o.pi;}}
   lastPolys=doc.polys.slice();
 }
 function resetPolyRefs(){lastPolys=doc.polys.slice();}
@@ -174,15 +175,10 @@ function addPointAt(x,y,tol=1){
   for(const l of doc.lines){if(distSeg({x,y},l.a,l.b)<=tol){const t=segT({x,y},l.a,l.b);if(t>0&&t<1)return splitLine(l,x,y);}}
   const p=P(x,y);doc.pts.push(p);return p;
 }
+// Like Forge, a new line that crosses existing lines doesn't cut them: the lines just pass over each other, so two
+// polygons can take up the same space without touching ("5D space"). A line that ends on another line still joins it.
 function addSegment(p,q){
   if(p===q)return [p];
-  for(const l of [...doc.lines]){
-    if(l.a===p||l.b===p||l.a===q||l.b===q)continue;
-    const I=segIntersect(p,q,l.a,l.b);if(!I)continue;
-    const ix=Math.round(I.x),iy=Math.round(I.y);
-    if(hyp(ix,iy,l.a.x,l.a.y)<1.5||hyp(ix,iy,l.b.x,l.b.y)<1.5)continue;
-    splitLine(l,ix,iy);
-  }
   const on=[];
   for(const r of doc.pts){if(r===p||r===q)continue;if(distSeg(r,p,q)<=1.01){const t=segT(r,p,q);if(t>1e-6&&t<1-1e-6)on.push([t,r]);}}
   on.sort((a,b)=>a[0]-b[0]);
@@ -223,17 +219,18 @@ function traceFace(u,v,adj){
 }
 function fillAt(x,y){
   const pt={x,y};
-  if(polyAtPoint(pt))return {err:"That spot is already part of a polygon."};
-  const cands=doc.lines.map(l=>[distSeg(pt,l.a,l.b),l]).sort((a,b)=>a[0]-b[0]).slice(0,8);
-  const adj=adjacency();let best=null;
+  // overlapping polygons are allowed (as in Forge), so a spot inside a polygon can still be filled: take the smallest loop
+  // around it that isn't a polygon yet. Lines that only cross (no shared point) never join loops.
+  const cands=doc.lines.map(l=>[distSeg(pt,l.a,l.b),l]).sort((a,b)=>a[0]-b[0]).slice(0,24);
+  const adj=adjacency();let best=null,sawPoly=false;
   for(const [,l] of cands)for(const [u,v] of [[l.a,l.b],[l.b,l.a]]){
     const ring=traceFace(u,v,adj);if(!ring||ring.length<3||new Set(ring).size!==ring.length)continue;
     if(!pointInPoly(pt,ring))continue;const A=Math.abs(signedArea(ring));
+    if(doc.polys.find(q=>sameRing(q,ring))){sawPoly=true;continue;}
     if(!best||A<best.A)best={ring,A};
   }
-  if(!best)return {err:"No closed loop of lines surrounds that spot."};
+  if(!best)return {err:sawPoly?"That loop is already a polygon.":"No closed loop of lines surrounds that spot."};
   let ring=best.ring;if(signedArea(ring)<0)ring=[...ring].reverse();
-  if(doc.polys.find(q=>sameRing(q,ring)))return {err:"That loop is already a polygon."};
   const nb=neighborPoly(ring);
   const base=nb?{floor:nb.floor,ceil:nb.ceil,light:nb.light,ftex:nb.ftex,ctex:nb.ctex,wtex:nb.wtex}:{floor:opts.newFloor,ceil:opts.newCeil};
   const poly={...polyDefaults(),...base,verts:ring};doc.polys.push(poly);
@@ -715,7 +712,7 @@ function buildMapChunks(d=doc){
   w=new BW();for(const nt of d.notes||[]){const q=polyAtPointIn(d,nt);w.i16(nt.type|0);w.i16(nt.x);w.i16(nt.y);w.i16(q?polys.indexOf(q):-1);w.str(nt.text||"",64);}
   chunks.push(["NOTE",w.out()]);
   w=new BW();let dropped=0;
-  for(const o of d.objs){const q=polyAtPointIn(d,o);if(!q){dropped++;continue;}
+  for(const o of d.objs){const q=objPoly(o,d);if(!q){dropped++;continue;}
     const facing=o.kind===5?(o.sub2|0):Math.round((((o.facing%360)+360)%360)*512/360)%512;
     w.i16(o.kind);w.i16(o.sub|0);w.i16(facing);w.i16(polys.indexOf(q));w.i16(o.x);w.i16(o.y);w.i16(o.z|0);w.i16(o.flags|0);}
   chunks.push(["OBJS",w.out()]);
@@ -758,6 +755,9 @@ function platformInfo(d=doc){
   return out;
 }
 function polyAtPointIn(d,p){for(let i=d.polys.length-1;i>=0;i--)if(pointInPoly(p,d.polys[i].verts))return d.polys[i];return null;}
+// an object's polygon: the one it was saved in (pi) while it still contains it, else the polygon under it.
+// Matters where polygons overlap: the same spot can be in two polygons at different heights.
+function objPoly(o,d=doc){const q=o.pi!=null?d.polys[o.pi]:null;return q&&pointInPoly(o,q.verts)?q:polyAtPointIn(d,o);}
 function physicsChunksFor(d){
   const ph=d.physics||{mode:"none"};const out={};
   if(ph.mode==="keep"&&ph.keep)for(const t of PHYSICS_TAGS)if(ph.keep[t])out[t]=b64dec(ph.keep[t]);
@@ -877,7 +877,7 @@ function levelToDoc(lv){
     for(const sd of d.sides.values())if(sd.panel&&panelKeyOf(sd.panel.type)==="platform")sd.panel.perm=fix(sd.panel.perm);}
   if(c.OBJS)for(let o=0;o+16<=c.OBJS.byteLength;o+=16){const v=c.OBJS;const kind=v.getInt16(o);
     const f=v.getInt16(o+4);
-    d.objs.push({kind,sub:v.getInt16(o+2),facing:kind===5?0:Math.round(f*360/512),sub2:kind===5?f:0,x:v.getInt16(o+8),y:v.getInt16(o+10),z:v.getInt16(o+12),flags:v.getUint16(o+14)});}
+    d.objs.push({kind,sub:v.getInt16(o+2),facing:kind===5?0:Math.round(f*360/512),sub2:kind===5?f:0,x:v.getInt16(o+8),y:v.getInt16(o+10),z:v.getInt16(o+12),flags:v.getUint16(o+14),pi:v.getInt16(o+6)});}
   if(c.NOTE)for(let o=0;o+72<=c.NOTE.byteLength;o+=72){const v=c.NOTE;const b=new Uint8Array(v.buffer,v.byteOffset+o+8,64);const z=b.indexOf(0);d.notes.push({type:v.getInt16(o),x:v.getInt16(o+2),y:v.getInt16(o+4),text:macDecode(b.subarray(0,z<0?64:z))});}
   if(c.Minf&&c.Minf.byteLength>=88){const m=c.Minf;Object.assign(d.info,{name:lv.name,env,landscape:clamp(m.getInt16(4),0,3),mission:m.getInt16(6),envFlags,entry:m.getInt32(84)||1});}
   if(c.plac&&c.plac.byteLength>=128*12){const rd=(i)=>[0,2,4,6,8,10].map(k=>c.plac.getUint16(i*12+k)<<16>>16);
@@ -1277,9 +1277,9 @@ function endPointer(e){
     const a=d.start,b=d.cur;const x0=Math.min(a.x,b.x),x1=Math.max(a.x,b.x),y0=Math.min(a.y,b.y),y1=Math.max(a.y,b.y);
     if(x1-x0<64||y1-y0<64){redraw();return;}
     const cs=[{x:x0,y:y0},{x:x1,y:y0},{x:x1,y:y1},{x:x0,y:y1}];
-    if(doc.polys.some(p=>convexOverlap(cs,p.verts))){status("That room would overlap an existing polygon. Rooms may touch but not overlap.");redraw();return;}
+    const over=doc.polys.some(p=>convexOverlap(cs,p.verts));
     pushUndo();const q=makePolygonFromCoords(cs,null);
-    if(q){if(!neighborPoly(q.verts)||true){} for(const p of [...doc.polys])if(p.verts.length>8)splitPolygon(p);setSel("poly",[q]);status(`Room added: ${((x1-x0)/WU).toFixed(2)} × ${((y1-y0)/WU).toFixed(2)} WU.`);}
+    if(q){for(const p of [...doc.polys])if(p.verts.length>8)splitPolygon(p);setSel("poly",[q]);status(`Room added: ${((x1-x0)/WU).toFixed(2)} × ${((y1-y0)/WU).toFixed(2)} WU.`+(over?" It overlaps another polygon: they share the space but don't connect (fine for bridges and stacked rooms).":""));}
     changed();
   } else if(d.type==="face"){changed();}
   else if(d.type==="paint"){if(d.did)changed();else undoStack.pop();}
@@ -2226,7 +2226,7 @@ function open3D(){
     const dyn=new Set();for(const q of plats.keys()){dyn.add(q);q.verts.forEach((v,k)=>{const oi=edgeOwner.get(sideKey(q.verts[(k+1)%q.verts.length],v));if(oi!=null)dyn.add(doc.polys[oi]);});}
     dynPolys=doc.polys.filter(q=>dyn.has(q));
     statMeshes=emit(doc.polys.filter(q=>!dyn.has(q)));dynMeshes=emit(dynPolys);meshes=statMeshes.concat(dynMeshes);
-    for(const o of doc.objs){const q=polyAtPoint(o);if(!q)continue;const s=spriteFor(o);const size=o.kind===2?0.35:0.6;s.scale.set(size,size,1);s.position.set(o.x*S,(hNow(q).floor+(o.z||0))*S+size/2,o.y*S);scene.add(s);sprites.push(s);}
+    for(const o of doc.objs){const q=objPoly(o);if(!q)continue;const s=spriteFor(o);const size=o.kind===2?0.35:0.6;s.scale.set(size,size,1);s.position.set(o.x*S,(hNow(q).floor+(o.z||0))*S+size/2,o.y*S);scene.add(s);sprites.push(s);}
   }
   function rebuildDyn(){dropMeshes(dynMeshes);dynMeshes=emit(dynPolys);meshes=statMeshes.concat(dynMeshes);}
   function emit(polys){
@@ -2283,7 +2283,7 @@ function open3D(){
   // a switch or trigger: starts a stopped platform, stops a running one (unless it can't be stopped by switches)
   function platToggle(p){if(!p)return;if(p.active){if(!has(p,16))platDeactivate(p);}else platActivate(p);}
   const toward=(v,t,d)=>v<t?Math.min(t,v+d):Math.max(t,v-d);
-  function platTick(){let moved=false;const inQ=fly?null:polyAtPoint(st);
+  function platTick(){let moved=false;const inQ=fly?null:here();
     for(const p of plats.values()){if(!p.active)continue;if(p.wait>0){p.wait--;continue;}
       const r=p.r,tf=p.ext?r.maxF:r.minF,tc=p.ext?r.minC:r.maxC;
       const d=(!p.ext&&has(p,22))?Math.max(1,p.speed>>2):p.speed;
@@ -2308,11 +2308,22 @@ function open3D(){
   function updateAim(){ray.setFromCamera(center,camera);const hit=ray.intersectObjects(meshes,false)[0];
     aim=hit?surfOf.get(hit.object)[hit.faceIndex]:null;if(aim&&aim.kind==="media")aim=null;
     if(aim){hlGeo.setAttribute("position",new THREE.Float32BufferAttribute(aim.corners.flat(),3));hl.visible=paletteShown;}else hl.visible=false;}
-  const start=doc.objs.find(o=>o.kind===3&&polyAtPoint(o))||(()=>{const c=centroid(doc.polys[0].verts);return {x:c.x,y:c.y,facing:0};})();
+  const start=doc.objs.find(o=>o.kind===3&&objPoly(o))||(()=>{const c=centroid(doc.polys[0].verts);return {x:c.x,y:c.y,facing:0};})();
   const st={x:0,y:0,feet:0,yaw:0,pitch:0,vy:0};let fly=false;
-  function reset(){st.x=start.x;st.y=start.y;const q=polyAtPoint(start);st.feet=q?q.floor:0;st.yaw=(start.facing||0)*Math.PI/180;st.pitch=0;st.vy=0;}
+  let curPoly=null;
+  function reset(){st.x=start.x;st.y=start.y;const q=start.kind===3?objPoly(start):polyAtPoint(start);curPoly=q;st.feet=q?q.floor:0;st.yaw=(start.facing||0)*Math.PI/180;st.pitch=0;st.vy=0;}
   reset();
-  let curPoly=polyAtPoint(st);
+  // Walking keeps track of the polygon you're in by the edges you cross, as the game does, not by position:
+  // where polygons overlap (bridges, stacked rooms) the same spot is in both, and only the edges tell them apart.
+  const here=()=>(fly||!curPoly)?polyAtPoint(st):curPoly;
+  function trace(q,x0,y0,x1,y1){const to={x:x1,y:y1};let from={x:x0,y:y0},skip=null;
+    for(let n=0;n<24&&q;n++){let best=null;
+      q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];if(skip&&sideKey(a,b)===skip)return;const I=segIntersect(from,to,a,b);if(!I)return;
+        const d=Math.hypot(I.x-from.x,I.y-from.y);if(!best||d<best.d)best={d,I,a,b};});
+      if(!best)return q; // stays inside q
+      const oi=edgeOwner.get(sideKey(best.b,best.a));if(oi==null)return null; // a wall with nothing behind it
+      skip=sideKey(best.b,best.a);from=best.I;q=doc.polys[oi];}
+    return pointInPoly(to,q.verts)?q:null;}
   const msgEl=wrap.querySelector("#h3msg"),flashEl=wrap.querySelector("#h3flash");let msgT=0;
   function say(m){msgEl.textContent=m;msgEl.hidden=false;clearTimeout(msgT);msgT=setTimeout(()=>msgEl.hidden=true,2600);}
   // stepping into a polygon: lifts start, platform triggers fire, teleporters send you on
@@ -2323,7 +2334,7 @@ function open3D(){
     if(q.type===10&&!teleporting){
       if(q.perm>=0){const t=doc.polys[q.perm];if(!t){say(`This teleporter points at polygon ${q.perm}, which doesn't exist`);return;}
         teleporting=true;flashEl.style.opacity="0.85";
-        setTimeout(()=>{const c=centroid(t.verts);st.x=c.x;st.y=c.y;st.feet=hNow(t).floor;st.vy=0;curPoly=polyAtPoint(st);flashEl.style.opacity="0";
+        setTimeout(()=>{const c=centroid(t.verts);st.x=c.x;st.y=c.y;st.feet=hNow(t).floor;st.vy=0;curPoly=t;flashEl.style.opacity="0";
           setTimeout(()=>teleporting=false,300);},250);}
       else say(`Teleporter to level ${-1-q.perm} (other levels aren't followed in 3D)`);}
     if(q.type===18)say("Automatic exit: the level ends here in the game");}
@@ -2339,7 +2350,7 @@ function open3D(){
         const t=clamp(((st.x-a.x)*(b.x-a.x)+(st.y-a.y)*(b.y-a.y))/(((b.x-a.x)**2+(b.y-a.y)**2)||1),0,1);const px=a.x+(b.x-a.x)*t,py=a.y+(b.y-a.y)*t;
         const dx=px-st.x,dy=py-st.y,dd=Math.hypot(dx,dy);if(dd>reach||(dd>1&&(dx*fx+dy*fy)/dd<0.6))return;
         if(dd<bsd&&(sideGet(a,b)||{}).panel){bs=[a,b];bsd=dd;}
-        if(pq&&dd<bpd&&q!==polyAtPoint(st)){bp=pq;bpd=dd;}});}
+        if(pq&&dd<bpd&&q!==here()){bp=pq;bpd=dd;}});}
       if(bs)side=bs;else if(bp)plat=bp;}
     if(side){const pn=sideGet(side[0],side[1]).panel;const key=panelKeyOf(pn.type);
       if(key==="platform"){const t=plats.get(doc.polys[pn.perm]);if(t){platToggle(t);say(`Switch: platform ${pn.perm} ${t.active?"started":"stopped"}`);}else say(`This switch points at polygon ${pn.perm}, which isn't a door or lift`);return;}
@@ -2348,14 +2359,15 @@ function open3D(){
       if(key==="light"){say(`Light switch: light ${pn.perm} (lights don't change in 3D yet)`);return;}
       const pl=panelList(doc.info.env).find(x=>x.type===pn.type);say(pl?pl.label:"Control panel");return;}
     if(plat){usePlat(plat);return;}
-    const here=polyAtPoint(st);const p=here&&plats.get(here);if(p){usePlat(p);return;}
+    const hq=here();const p=hq&&plats.get(hq);if(p){usePlat(p);return;}
     say("Nothing to use here");}
   function usePlat(p){if(!has(p,13)){say("This only moves from a switch or trigger");return;}if(has(p,24)){say("It's locked");return;}
     if(p.active){p.ext=!p.ext;p.wait=0;}else platActivate(p);}
   const keys=new Set();const EYE=0.66*WU,BODY=0.8*WU,STEP=0.3*WU;
+  let mvPoly=null; // the polygon the last allowed move ends in
   function canMove(nx,ny){
     if(fly)return Math.abs(nx)<MAXC&&Math.abs(ny)<MAXC;
-    const q0=polyAtPoint({x:nx,y:ny});if(!q0)return false;const q=hNow(q0);
+    const q0=curPoly?trace(curPoly,st.x,st.y,nx,ny):polyAtPoint({x:nx,y:ny});if(!q0)return false;const q=hNow(q0);mvPoly=q0;
     if(q.floor-st.feet>STEP)return false;if(q.ceil-Math.max(q.floor,st.feet)<BODY)return false;
     for(const l of doc.lines)if(l.solid&&segIntersect({x:st.x,y:st.y},{x:nx,y:ny},l.a,l.b))return false;
     return true;}
@@ -2403,7 +2415,10 @@ function open3D(){
   function editSurface(){if(!aim)return;try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}keys.clear();
     openSurfaceDialog(aim,()=>{refresh();});}
   let dirty=false,lastAim;
-  function setFly(v){fly=v;wrap.querySelector("#h3fly").classList.toggle("on",v);status(v?"Flying: walls don't stop you. R rises, C sinks.":"Walking.");}
+  // landing after flying: where polygons overlap, take the one whose floor is just under your feet
+  function landPoly(){const qs=doc.polys.filter(q=>pointInPoly(st,q.verts));if(!qs.length)return null;
+    const under=qs.filter(q=>hNow(q).floor<=st.feet+STEP);return (under.length?under:qs).reduce((a,b)=>under.length?(hNow(b).floor>hNow(a).floor?b:a):(hNow(b).floor<hNow(a).floor?b:a));}
+  function setFly(v){fly=v;if(!v)curPoly=landPoly();wrap.querySelector("#h3fly").classList.toggle("on",v);status(v?"Flying: walls don't stop you. R rises, C sinks.":"Walking.");}
   function setPalette(v){paletteShown=v;showMouseMode();wrap.querySelector("#h3bar").hidden=!v;wrap.querySelector("#h3palbtn").classList.toggle("on",v);
     wrap.querySelector("#h3pad").style.bottom=v?"calc(150px + env(safe-area-inset-bottom,0px))":"";if(v)renderPalette();updateAim();}
   const helpEl=wrap.querySelector("#h3help"),mouseBtn=wrap.querySelector("#h3mouse");
@@ -2516,21 +2531,21 @@ function open3D(){
     let fx=0,fy=0;const cy=Math.cos(st.yaw),sy=Math.sin(st.yaw);
     if(keys.has("w")||keys.has("arrowup")){fx+=cy;fy+=sy;}if(keys.has("s")||keys.has("arrowdown")){fx-=cy;fy-=sy;}
     if(keys.has("a")){fx+=sy;fy-=cy;}if(keys.has("d")){fx-=sy;fy+=cy;}
-    const m=Math.hypot(fx,fy);
+    const m=Math.hypot(fx,fy);let moved=false;mvPoly=null;
     if(m>0){fx=fx/m*spd;fy=fy/m*spd;
       if(fly){const cp=Math.cos(st.pitch);st.x+=fx*cp;st.y+=fy*cp;if(keys.has("w")||keys.has("arrowup"))st.feet+=Math.sin(st.pitch)*spd;if(keys.has("s")||keys.has("arrowdown"))st.feet-=Math.sin(st.pitch)*spd;}
-      else if(canMove(st.x+fx,st.y+fy)){st.x+=fx;st.y+=fy;}else if(canMove(st.x+fx,st.y)){st.x+=fx;}else if(canMove(st.x,st.y+fy)){st.y+=fy;}}
+      else if(canMove(st.x+fx,st.y+fy)){st.x+=fx;st.y+=fy;moved=true;}else if(canMove(st.x+fx,st.y)){st.x+=fx;moved=true;}else if(canMove(st.x,st.y+fy)){st.y+=fy;moved=true;}}
     st.x=clamp(st.x,-MAXC,MAXC);st.y=clamp(st.y,-MAXC,MAXC);
     if(fly){if(keys.has("r"))st.feet+=spd;if(keys.has("c"))st.feet-=spd;}
-    else{const q0=polyAtPoint(st);const q=q0?hNow(q0):null;if(q){if(st.feet<q.floor)st.feet=Math.min(q.floor,st.feet+4*WU*dt);else if(st.feet>q.floor){st.vy-=9*WU*dt;st.feet=Math.max(q.floor,st.feet+st.vy*dt);}if(st.feet<=q.floor)st.vy=0;}}
-    if(!fly){const nq=polyAtPoint(st);if(nq!==curPoly){curPoly=nq;if(nq)entered(nq);}}else curPoly=polyAtPoint(st);
+    else{const q0=here();const q=q0?hNow(q0):null;if(q){if(st.feet<q.floor)st.feet=Math.min(q.floor,st.feet+4*WU*dt);else if(st.feet>q.floor){st.vy-=9*WU*dt;st.feet=Math.max(q.floor,st.feet+st.vy*dt);}if(st.feet<=q.floor)st.vy=0;}}
+    if(!fly){if(moved&&mvPoly&&mvPoly!==curPoly){curPoly=mvPoly;entered(mvPoly);}}else curPoly=polyAtPoint(st);
     runPlats(dt);
     camera.position.set(st.x*S,(st.feet+EYE)*S,st.y*S);
     const cp=Math.cos(st.pitch);camera.lookAt(camera.position.x+Math.cos(st.yaw)*cp,camera.position.y+Math.sin(st.pitch),camera.position.z+Math.sin(st.yaw)*cp);
     if(dragDirty){dragDirty=false;refresh();}
     updateAim();if(aim!==lastAim||drag){aimEl.textContent=describe(aim);lastAim=aim;}
     animateXfers(now/1000);renderer.render(scene,camera);
-    const q=polyAtPoint(st);posEl.textContent=`x ${(st.x/WU).toFixed(2)} y ${(st.y/WU).toFixed(2)} · ${q?"polygon "+doc.polys.indexOf(q):"outside"}`;
+    const q=here();posEl.textContent=`x ${(st.x/WU).toFixed(2)} y ${(st.y/WU).toFixed(2)} · ${q?"polygon "+doc.polys.indexOf(q):"outside"}`;
     raf=requestAnimationFrame(frame);}
   raf=requestAnimationFrame(frame);
   function close(){cancelAnimationFrame(raf);document.removeEventListener("pointerlockchange",showMouseMode);document.removeEventListener("keydown",onKey,true);document.removeEventListener("keyup",offKey);window.removeEventListener("resize",size);window.removeEventListener("forge-shapes",onShapes);
@@ -3284,5 +3299,6 @@ restoreShapes().then(()=>{refreshShapesUI();let seen=false;try{seen=!!localStora
 requestAnimationFrame(()=>{resize();fitView();});
 window.__forge={scenario,switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;changed();}};
 Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
+  makePolygonFromCoords,addPointAt,addSegment,fillAt,objPoly,
   screenOf(x,y){const r=canvas.getBoundingClientRect();const [sx,sy]=toS(x,y);return {x:r.left+sx,y:r.top+sy};},centroid,fitView});
 Object.defineProperty(window.__forge,"vpaint",{get:()=>vpaint});

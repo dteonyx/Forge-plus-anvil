@@ -391,3 +391,28 @@ test("a texture drag's run follows touching pieces with the same texture, around
   assert.deepEqual(r.run, ["7,4>4,4", "4,4>0,4", "0,4>0,0", "0,0>4,0", "4,0>7,0"]);
   assert.equal(r.floors, 2, "A and B share floor texture 6; C has 9");
 });
+
+test("crossing lines don't cut each other, so polygons can overlap (Forge's 5D space)", async () => {
+  const { page } = app;
+  const r = await page.evaluate(() => {
+    const f = window.__forge, W = 1024;
+    f.setDoc(f.newDoc("inf"));
+    const A = f.makePolygonFromCoords([{ x: 0, y: 0 }, { x: 4 * W, y: 0 }, { x: 4 * W, y: 4 * W }, { x: 0, y: 4 * W }], null);
+    // a second shape drawn across A, as in Bungie's Forge tutorial 2
+    const P = [[2, -2], [6, -2], [6, 2], [2, 2]].map(([x, y]) => f.addPointAt(x * W, y * W, 1));
+    for (let i = 0; i < 4; i++) f.addSegment(P[i], P[(i + 1) % 4]);
+    const lines = f.doc.lines.length, corners = A.verts.length;
+    const fill = f.fillAt(3 * W, 1 * W); // inside both shapes
+    const again = f.fillAt(1 * W, 1 * W); // only inside A
+    // an object keeps the polygon it was saved in, even where two polygons overlap
+    f.doc.objs.push({ kind: 2, sub: 1, x: 3 * W, y: 1 * W, z: 0, facing: 0, flags: 0, pi: 0 });
+    const lv = f.levelToDoc(f.parseWad(f.buildWadFile(f.buildMapChunks(f.doc).chunks, "t").buffer.slice(0)).levels[0]);
+    return { lines, corners, filled: !!fill.poly, again: again.err, polys: f.doc.polys.length, objPoly: lv.doc.objs.find((o) => o.kind === 2).pi };
+  });
+  assert.equal(r.lines, 8, "no points added where the lines cross");
+  assert.equal(r.corners, 4);
+  assert.ok(r.filled, "the overlapping shape fills");
+  assert.equal(r.again, "That loop is already a polygon.");
+  assert.equal(r.polys, 2);
+  assert.equal(r.objPoly, 0, "the item stays in polygon 0, not the overlapping one");
+});
