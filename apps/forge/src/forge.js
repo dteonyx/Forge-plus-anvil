@@ -2163,7 +2163,7 @@ function open3D(){
   <div id="h3msg" style="position:absolute;left:50%;top:62%;transform:translateX(-50%);padding:6px 12px;border-radius:6px;background:rgba(0,0,0,.65);color:#fff;font:13px/1.3 system-ui,sans-serif;pointer-events:none;z-index:6" hidden></div>
   <div id="h3flash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s;z-index:5"></div>
   <div class="paintbar" id="h3bar">
-    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Click or Space paints · Shift+Space paints the whole room · mouse wheel or [ ] picks the texture · drag a surface to slide its texture (everything touching with the same texture moves and lines up; Ctrl moves one piece) · Shift+drag a floor or ceiling to raise or lower it · G or Alt-click picks up · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
+    <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Click or Space paints · Shift+click through an opening paints its see-through texture (windows, grates) · Shift+Space paints the whole room · mouse wheel or [ ] picks the texture · drag a surface to slide its texture (everything touching with the same texture moves and lines up; Ctrl moves one piece) · Shift+drag a floor or ceiling to raise or lower it · G or Alt-click picks up · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
       <span class="paintopts"><label>Set <select id="h3set"></select></label><label><input type="checkbox" id="h3applyTex"> Apply texture</label><label><input type="checkbox" id="h3applyLight"> Apply light</label><label>Light <input type="number" id="h3light" min="0" max="100" step="5"> %</label></span></div>
     <div class="palette" id="h3pal"></div></div>
   <div class="pad" id="h3pad"><button data-a="paint" aria-label="Paint">Paint</button><button data-k="f" aria-label="Forward">▲</button><button data-a="edit" aria-label="Edit surface">Edit</button><button data-k="l" aria-label="Turn left">◀</button><button data-k="b" aria-label="Back">▼</button><button data-k="r" aria-label="Turn right">▶</button></div>`;
@@ -2447,6 +2447,29 @@ function open3D(){
         q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];const sd=sideGet(a,b);if(sd)for(const part of ["full","upper","lower","trans"])if(sd[part]){delete sd[part].light;delete sd[part].li;}});}
       else applyLight(s,paintLight);}
     refresh();}
+  // Shift+click (or Shift+Space) on an opening, like Forge: paints the see-through texture across the line you're looking
+  // through, on both sides, e.g. a grate or window on a solid line. Follows the view ray out through openings and takes the
+  // first solid line it passes (a window), else the first opening. The same texture again takes it off.
+  function openingAt(e){const r=new THREE.Vector2(0,0);if(e){const b=cv.getBoundingClientRect();r.set(((e.clientX-b.left)/b.width)*2-1,-((e.clientY-b.top)/b.height)*2+1);}
+    ray.setFromCamera(r,camera);const dv=ray.ray.direction,h2=Math.hypot(dv.x,dv.z);let q=here();if(!q||h2<1e-6)return null;
+    const dx=dv.x/h2,dy=dv.z/h2,slope=dv.y/h2,eyeY=camera.position.y/S;const to={x:st.x+dx*256*WU,y:st.y+dy*256*WU};
+    let from={x:st.x,y:st.y},skip=null;const found=[];
+    for(let n=0;n<64&&q;n++){let best=null;
+      q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];if(skip&&sideKey(a,b)===skip)return;const I=segIntersect(from,to,a,b);if(!I)return;
+        const d=Math.hypot(I.x-st.x,I.y-st.y);if(!best||d<best.d)best={d,I,a,b};});
+      if(!best)break;const y=eyeY+slope*best.d,h=hNow(q);if(y<h.floor||y>h.ceil)break; // the ray reaches this polygon's floor or ceiling first
+      const oi=edgeOwner.get(sideKey(best.b,best.a));if(oi==null)break;const n2=doc.polys[oi],hn=hNow(n2);
+      if(!(y>Math.max(h.floor,hn.floor)&&y<Math.min(h.ceil,hn.ceil)))break; // into a step or an overhang: that's a wall
+      const l=findLine(best.a,best.b);found.push({q,other:n2,a:best.a,b:best.b,dist:best.d*S,solid:!!(l&&l.solid)});
+      skip=sideKey(best.b,best.a);from=best.I;q=n2;}
+    return found.find(o=>o.solid)||found[0]||null;}
+  function paintOpening(e){const o=openingAt(e);if(!o)return false;if(!paintApply.tex){status("Tick Apply texture first.");return true;}
+    pushUndo();const col=ownCol(paintCol);const same=t=>t&&t.b===paintTex&&(t.col??null)===(col??null);
+    const sides=[[o.a,o.b],[o.b,o.a]];const off=sides.every(([a,b])=>same((sideGet(a,b)||{}).trans));
+    for(const [a,b] of sides){const sd=sideGet(a,b)||{};if(off){if(sd.trans)sideSet(a,b,"trans",null);}
+      else{const t={...(sd.trans||{ox:0,oy:0}),b:paintTex};delete t.col;delete t.clut;if(col!=null)t.col=col;sideSet(a,b,"trans",t);}}
+    refresh();const pa=doc.polys.indexOf(o.q),pb=doc.polys.indexOf(o.other);
+    status(off?`Took the see-through texture off the line between polygons ${pa} and ${pb}.`:`See-through texture ${paintTex} painted on the ${o.solid?"solid ":""}line between polygons ${pa} and ${pb} (both sides).`);return true;}
   function grab(){if(!aim)return;const t=texOfSurf(aim);paintTex=t.b;paintCol=ownCol(t.col);paintLight=t.light??aim.poly.light;renderPalette();lightIn.value=paintLight;status(`Picked up ${isLandCol(paintCol)?"landscape":(paintCol!=null?setName(paintCol):"")+"texture"} ${paintTex} and light ${paintLight}%.`);}
   function nudge(dx,dy){if(!aim)return;const s=aim;pushUndo();
     if(s.kind==="floor"){s.poly.fox=(s.poly.fox||0)+dx;s.poly.foy=(s.poly.foy||0)+dy;}
@@ -2476,7 +2499,7 @@ function open3D(){
   const onKey=e=>{if(!$("modal").hidden)return;if(e.target&&e.target.tagName==="INPUT"&&e.key!=="Escape")return;const k=e.key.toLowerCase();
     if((e.ctrlKey||e.metaKey)&&k==="z"){e.preventDefault();e.shiftKey?redo():undo();refresh();return;}
     if(k==="escape"){if(document.pointerLockElement)return;close();return;}
-    if(k===" "){e.preventDefault();if(!e.repeat)paint(e.shiftKey);return;}
+    if(k===" "){e.preventDefault();if(!e.repeat){if(e.shiftKey&&paletteShown){const o=openingAt(null),h=surfAt();if(o&&(!h||o.dist<=h.dist+0.02)){paintOpening(null);return;}}paint(e.shiftKey);}return;}
     if(k==="m"){lockMouse(document.pointerLockElement!==cv);return;}
     if(k==="f"){setFly(!fly);return;}if(k==="p"||k==="tab"){e.preventDefault();setPalette(!paletteShown);return;}
     if(k==="g"){grab();return;}if(k==="o"){wrap.querySelector("#h3doors").click();return;}
@@ -2542,6 +2565,7 @@ function open3D(){
     if(e.button===2){if(locked){updateAim();editSurface();return;}
       rlook={x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,ev:e};cv.setPointerCapture(e.pointerId);return;}
     if(e.button===0&&e.altKey){updateAim();grab();return;}
+    if(e.button===0&&e.shiftKey&&paletteShown){const ev=locked?null:e;const o=openingAt(ev),h=surfAt(ev);if(o&&(!h||o.dist<=h.dist+0.02)){paintOpening(ev);return;}}
     if(e.button===0&&paletteShown&&e.pointerType==="mouse"){drag=startDrag(e,locked);if(drag){e.preventDefault();if(!locked)cv.setPointerCapture(e.pointerId);return;}if(locked)return;}
     if(locked){if(e.button===0)paint(e.shiftKey);return;}
     look={x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,touch:e.pointerType!=="mouse"};cv.setPointerCapture(e.pointerId);});
@@ -2593,7 +2617,7 @@ function open3D(){
     try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}
     for(const g of groupOf.values())dropGroup(g);
     disposables.forEach(d=>d.dispose&&d.dispose());renderer.dispose();wrap.remove();view3d=null;if(dirty){changed();status("Surfaces painted in 3D. Export to see them in Aleph One.");}}
-  view3d={close,build:refresh,test:{plats:()=>plats,st,action,keys,surfAt,setPoly:q=>{curPoly=q;},enter:q=>{curPoly=q;entered(q);},tree:()=>{const r=here();return r?portalTree(r):null;},setYaw:v=>{st.yaw=v;st.pitch=0;},meshes:()=>meshes,curPoly:()=>curPoly}}; // test is for the headless tests
+  view3d={close,build:refresh,test:{plats:()=>plats,groups:()=>groupOf,openingAt,paintOpening,st,action,keys,surfAt,setPoly:q=>{curPoly=q;},enter:q=>{curPoly=q;entered(q);},tree:()=>{const r=here();return r?portalTree(r):null;},setYaw:v=>{st.yaw=v;st.pitch=0;},meshes:()=>meshes,curPoly:()=>curPoly}}; // test is for the headless tests
 }
 
 // =============================================================== scenario: several levels, pictures, physics
