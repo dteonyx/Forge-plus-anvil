@@ -1894,9 +1894,16 @@ function shapeCanvas(game,colIdx,shapeIdx,clut=0){
     if(bi>=0&&bi<d.bmOffs.length){const bm=decodeBitmap(c,bi);const tab=d.cluts[clut]||d.cluts[0];
       cv=document.createElement("canvas");cv.width=bm.w;cv.height=bm.h;const g=cv.getContext("2d");const img=g.createImageData(bm.w,bm.h);
       for(let k=0;k<bm.pix.length;k++){const ci=bm.pix[k]*4;img.data[k*4]=tab[ci];img.data[k*4+1]=tab[ci+1];img.data[k*4+2]=tab[ci+2];img.data[k*4+3]=255;}
-      g.putImageData(img,0,0);}}}catch(e){cv=null;}
+      g.putImageData(img,0,0);cv._pix=bm.pix;
+      // landscapes are stored a quarter turn round from walls: turn them back (left) so the sky is on top and the picture is wide
+      if(isLandCol(colIdx)){const r=document.createElement("canvas");r.width=bm.h;r.height=bm.w;const rg=r.getContext("2d");rg.translate(0,bm.w);rg.rotate(-Math.PI/2);rg.drawImage(cv,0,0);cv=r;}}}}catch(e){cv=null;}
   texCache.set(key,cv);return cv;
 }
+// Marathon's see-through rule: colour number 0 of a texture is clear (walls with a see-through texture, grates, windows).
+// Stand-in textures have no colour numbers, so there the top-left pixel's colour is used.
+function clearColour0(img,src){const d=img.data;
+  if(src&&src._pix&&src._pix.length*4===d.length){const px=src._pix;for(let k=0;k<px.length;k++)if(px[k]===0)d[k*4+3]=0;return;}
+  const r0=d[0],g0=d[1],b0=d[2];for(let i=0;i<d.length;i+=4)if(d[i]===r0&&d[i+1]===g0&&d[i+2]===b0)d[i+3]=0;}
 function proceduralTex(bitmap,envIdx){
   const key="proc:"+envIdx+":"+bitmap;if(texCache.has(key))return texCache.get(key);
   const env=ENVS[envIdx]||ENVS[0];const c=document.createElement("canvas");c.width=c.height=64;const g=c.getContext("2d");
@@ -2189,12 +2196,14 @@ function open3D(){
     if(xf===7){ // Static: noise instead of the texture, redrawn every frame
       const cvs=document.createElement("canvas");cvs.width=cvs.height=64;const t=new THREE.CanvasTexture(cvs);t.magFilter=t.minFilter=THREE.NearestFilter;t.generateMipmaps=false;t.wrapS=t.wrapT=THREE.RepeatWrapping;
       const m=new THREE.MeshBasicMaterial({map:t,vertexColors:true,side:THREE.DoubleSide});mats.set(key,m);disposables.push(t,m);anims.push({t,xf,cvs});return m;}
-    let cvs=src;if(kind==="t"){cvs=document.createElement("canvas");cvs.width=src.width;cvs.height=src.height;const g=cvs.getContext("2d");g.drawImage(src,0,0);const im=g.getImageData(0,0,cvs.width,cvs.height);
-      const r0=im.data[0],g0=im.data[1],b0=im.data[2];for(let i=0;i<im.data.length;i+=4)if(im.data[i]===r0&&im.data[i+1]===g0&&im.data[i+2]===b0)im.data[i+3]=0;g.putImageData(im,0,0);}
+    // colour 0 is clear on see-through textures, and on any wall whose texture has it (behind a solid wall that's empty space, as in game)
+    const holes=kind==="t"||(kind!=="m"&&!!(src._pix&&src._pix.includes(0)));
+    let cvs=src;if(holes){cvs=document.createElement("canvas");cvs.width=src.width;cvs.height=src.height;const g=cvs.getContext("2d");g.drawImage(src,0,0);const im=g.getImageData(0,0,cvs.width,cvs.height);
+      clearColour0(im,src);g.putImageData(im,0,0);}
     const t=new THREE.CanvasTexture(cvs);t.magFilter=THREE.NearestFilter;t.minFilter=THREE.NearestMipmapLinearFilter;t.wrapS=t.wrapT=THREE.RepeatWrapping;
     const m=kind==="m"?new THREE.MeshBasicMaterial({color:0xffffff,map:t,vertexColors:true,side:THREE.DoubleSide,transparent:true,opacity:0.65,depthWrite:false})
       :xf===2?new THREE.MeshBasicMaterial({map:t,vertexColors:true,side:THREE.DoubleSide,transparent:true,opacity:0.25,depthWrite:false}) // Invisible: shown faintly so it can still be found
-      :new THREE.MeshBasicMaterial({map:t,vertexColors:true,side:THREE.DoubleSide,transparent:kind==="t",alphaTest:kind==="t"?0.5:0});mats.set(key,m);disposables.push(t,m);
+      :new THREE.MeshBasicMaterial({map:t,vertexColors:true,side:THREE.DoubleSide,transparent:kind==="t",alphaTest:holes?0.5:0});mats.set(key,m);disposables.push(t,m);
     if(xf===4||xf===5||xf===6){ // Pulsate and wobble bend the texture in place (a gentle wave inside each tile, so nothing drifts)
       const k=xf===6?2:1;m.onBeforeCompile=sh=>{sh.uniforms.xT=xferTime;sh.fragmentShader="uniform float xT;\n"+sh.fragmentShader.replace("#include <map_fragment>",
         "#ifdef USE_MAP\nfloat ph=xT*6.2831853/64.0*"+k.toFixed(1)+";\n"+
@@ -2962,12 +2971,11 @@ function unrealSurfaces(){
   for(const [k,g] of groups)if(!g.pos.length)groups.delete(k);
   return {solid:[...groups.values()].filter(g=>!liquids.includes(g)),liquids:liquids.filter(g=>g.pos.length)};
 }
-// a texture as PNG bytes; see-through textures (kind "t") get their background colour made transparent, as in the 3D view
+// a texture as PNG bytes; see-through textures (kind "t") get colour 0 made transparent, as in the 3D view
 function unrealPng(g){
   const src=texCanvasFor(g.b,g.col??undefined,g.clut);const c=document.createElement("canvas");c.width=src.width;c.height=src.height;
   const x=c.getContext("2d");x.drawImage(src,0,0);
-  if(g.kind==="t"){const im=x.getImageData(0,0,c.width,c.height);const r0=im.data[0],g0=im.data[1],b0=im.data[2];
-    for(let i=0;i<im.data.length;i+=4)if(im.data[i]===r0&&im.data[i+1]===g0&&im.data[i+2]===b0)im.data[i+3]=0;x.putImageData(im,0,0);}
+  if(g.kind==="t"){const im=x.getImageData(0,0,c.width,c.height);clearColour0(im,src);x.putImageData(im,0,0);}
   const s=atob(c.toDataURL("image/png").split(",")[1]);const u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u;
 }
 // Packs meshes, materials and PNG textures into one binary glTF (.glb) file.
