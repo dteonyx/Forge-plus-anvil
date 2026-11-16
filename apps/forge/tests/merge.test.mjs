@@ -133,3 +133,66 @@ test("two of Bungie's maps merge into one that exports and re-imports cleanly", 
     assert.ok(r.s.stable);
   }
 });
+
+test("layers hide other heights, new rooms join the layer, and adding a map makes a layer per map", async () => {
+  const r = await app.page.evaluate(() => {
+    const f = window.__forge;
+    f.applySpec(f.randomSpec(31, "small", "carnage"), false, "a");
+    const A = f.doc;
+    f.applySpec(f.randomSpec(32, "small", "carnage"), false, "b");
+    const B = f.doc;
+    f.setDoc(A);
+    const nA = A.polys.length;
+    f.startPlacing(B, "Upper map");
+    f.placing.tx = f.placing.cx; f.placing.ty = f.placing.cy; // right on top
+    f.placing.dz = 8 * 1024;
+    f.finishMerge({});
+    const d = f.doc;
+    const layers = d.info.layers.map((l) => [l.name, l.lo, l.hi]);
+    f.setLayer(1);
+    const V = f.layerVis();
+    const shown = d.polys.filter((q) => V.polys.has(q)).length;
+    const lowShown = d.polys.slice(0, nA).some((q) => V.polys.has(q));
+    // a room drawn now lands on the upper layer
+    f.setTool("rect");
+    const before = d.polys.length;
+    const box = document.getElementById("map").getBoundingClientRect();
+    return { layers, shown, nB: d.polys.length - nA, lowShown, before };
+  });
+  assert.equal(r.layers.length, 2);
+  assert.equal(r.layers[1][0], "Upper map");
+  assert.ok(r.layers[1][1] >= 8 * 1024);
+  assert.equal(r.lowShown, false, "the lower map is hidden");
+  assert.equal(r.shown, r.nB);
+  // draw a room with the mouse on the upper layer, away from everything
+  const { page } = app;
+  const box = await page.locator("#map").boundingBox();
+  await page.evaluate(() => { const f = window.__forge; f.setTool("rect"); });
+  const hi = await page.evaluate(() => window.__forge.layer.lo);
+  await page.mouse.move(box.x + 30, box.y + box.height - 90);
+  await page.mouse.down();
+  await page.mouse.move(box.x + 120, box.y + box.height - 30, { steps: 4 });
+  await page.mouse.up();
+  const nr = await page.evaluate(() => { const d = window.__forge.doc; const q = d.polys[d.polys.length - 1]; return { floor: q.floor, n: d.polys.length }; });
+  assert.equal(nr.n, r.before + 1);
+  assert.equal(nr.floor, hi, "new room sits on the layer's floor height");
+});
+
+test("link with teleporter: pad points at the landing polygon and exports", async () => {
+  const r = await app.page.evaluate(() => {
+    const f = window.__forge;
+    f.applySpec(f.randomSpec(41, "small", "solo"), false, "a");
+    f.setLayer(-1);
+    const d = f.doc;
+    const c = (q) => { let x = 0, y = 0; for (const v of q.verts) { x += v.x; y += v.y; } return { x: x / q.verts.length, y: y / q.verts.length }; };
+    const a = d.polys.find((q) => q.type === 0), b = d.polys.filter((q) => q.type === 0).at(-1);
+    f.setTool("tele");
+    f.teleClick(c(a)); f.teleClick(c(b));
+    const back = f.levelToDoc(f.parseWad(f.buildWadFile(f.buildMapChunks(d).chunks, "T", 1).buffer.slice(0)).levels[0]).doc;
+    return { type: a.type, perm: a.perm, want: d.polys.indexOf(b), back: back.polys[d.polys.indexOf(a)].type, backPerm: back.polys[d.polys.indexOf(a)].perm };
+  });
+  assert.equal(r.type, 10);
+  assert.equal(r.perm, r.want);
+  assert.equal(r.back, 10);
+  assert.equal(r.backPerm, r.want);
+});

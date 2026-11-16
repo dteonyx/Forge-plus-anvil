@@ -186,7 +186,7 @@ function addSegment(p,q){
   for(let i=0;i<chain.length-1;i++){if(!findLine(chain[i],chain[i+1]))doc.lines.push({a:chain[i],b:chain[i+1],solid:false});}
   return chain;
 }
-function neighborPoly(ring){for(const q of doc.polys){for(let i=0;i<ring.length;i++){if(polyHasEdge(q,ring[i],ring[(i+1)%ring.length]))return q;}}return null;}
+function neighborPoly(ring){for(const q of doc.polys){if(!polyShown(q))continue;for(let i=0;i<ring.length;i++){if(polyHasEdge(q,ring[i],ring[(i+1)%ring.length]))return q;}}return null;}
 function sameRing(q,ring){if(q.verts.length!==ring.length)return false;const s=new Set(q.verts);return ring.every(v=>s.has(v));}
 function makePolygonFromPoints(ps,props){
   let ring=[];
@@ -197,7 +197,7 @@ function makePolygonFromPoints(ps,props){
   if(Math.abs(signedArea(ring))<64)return null;
   const dup=doc.polys.find(q=>sameRing(q,ring));if(dup)return dup;
   const nb=neighborPoly(ring);
-  const base=nb?{floor:nb.floor,ceil:nb.ceil,light:nb.light,ftex:nb.ftex,ctex:nb.ctex,wtex:nb.wtex}:{};
+  const base=nb?{floor:nb.floor,ceil:nb.ceil,light:nb.light,ftex:nb.ftex,ctex:nb.ctex,wtex:nb.wtex}:newHeights();
   const poly={...polyDefaults(),...base,...(props||{}),verts:ring};
   doc.polys.push(poly);return poly;
 }
@@ -232,7 +232,7 @@ function fillAt(x,y){
   if(!best)return {err:sawPoly?"That loop is already a polygon.":"No closed loop of lines surrounds that spot."};
   let ring=best.ring;if(signedArea(ring)<0)ring=[...ring].reverse();
   const nb=neighborPoly(ring);
-  const base=nb?{floor:nb.floor,ceil:nb.ceil,light:nb.light,ftex:nb.ftex,ctex:nb.ctex,wtex:nb.wtex}:{floor:opts.newFloor,ceil:opts.newCeil};
+  const base=nb?{floor:nb.floor,ceil:nb.ceil,light:nb.light,ftex:nb.ftex,ctex:nb.ctex,wtex:nb.wtex}:newHeights();
   const poly={...polyDefaults(),...base,verts:ring};doc.polys.push(poly);
   return {poly};
 }
@@ -1104,7 +1104,8 @@ function draw(){
   const key=opts.viewMode==="ceil"?"ceil":"floor";const range=heightRange(key);
   const selPolys=sel.kind==="poly"?new Set(sel.items):new Set();
   const bad=new Set(issues.filter(i=>i.lv==="error"&&i.target&&i.target.kind==="poly").flatMap(i=>i.target.items));
-  for(const q of doc.polys){
+  const V=layerVis();
+  for(const q of doc.polys){if(!V.polys.has(q))continue;
     ctx.beginPath();q.verts.forEach((v,i)=>{const [x,y]=toS(v.x,v.y);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.closePath();
     if(opts.viewMode==="tex"){const t=texPattern(q.ftex,q.fcol,q.fclut);const [ox,oy]=toS(-(q.fox||0),-(q.foy||0));const sc=WU*view.scale/t.w;
       try{t.p.setTransform(new DOMMatrix([sc,0,0,sc,ox,oy]));}catch(_){}ctx.fillStyle=t.p;ctx.fill();
@@ -1120,7 +1121,7 @@ function draw(){
   // lines
   const owners=new Map();for(const q of doc.polys)for(let i=0;i<q.verts.length;i++){const k=Math.min(q.verts[i].id,q.verts[(i+1)%q.verts.length].id)+"-"+Math.max(q.verts[i].id,q.verts[(i+1)%q.verts.length].id);owners.set(k,(owners.get(k)||0)+1);}
   const selLines=sel.kind==="line"?new Set(sel.items):new Set();
-  for(const l of doc.lines){const k=Math.min(l.a.id,l.b.id)+"-"+Math.max(l.a.id,l.b.id),n=owners.get(k)||0;
+  for(const l of doc.lines){if(!V.lines.has(l))continue;const k=Math.min(l.a.id,l.b.id)+"-"+Math.max(l.a.id,l.b.id),n=owners.get(k)||0;
     const [x0,y0]=toS(l.a.x,l.a.y),[x1,y1]=toS(l.b.x,l.b.y);ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);
     if(n===0){ctx.strokeStyle=pal.orphan;ctx.lineWidth=1.5;ctx.setLineDash([5,4]);}
     else if(n===1||l.solid){ctx.strokeStyle=pal.wall;ctx.lineWidth=l.solid&&n===2?2.5:2;}
@@ -1130,25 +1131,26 @@ function draw(){
   // points
   const ps=Math.max(2,Math.min(4,view.scale*WU/30));
   const selPts=sel.kind==="point"?new Set(sel.items):new Set();
-  if(view.scale*WU>14)for(const p of doc.pts){const [x,y]=toS(p.x,p.y);const s=selPts.has(p)||hover===p;ctx.fillStyle=s?pal.accent:pal.pt;const r=s?ps+2:ps;ctx.fillRect(x-r/2,y-r/2,r,r);}
+  if(view.scale*WU>14)for(const p of doc.pts){if(!V.pts.has(p))continue;const [x,y]=toS(p.x,p.y);const s=selPts.has(p)||hover===p;ctx.fillStyle=s?pal.accent:pal.pt;const r=s?ps+2:ps;ctx.fillRect(x-r/2,y-r/2,r,r);}
   // values
   if(opts.showValues&&view.scale*WU>26){ctx.font=`500 ${Math.round(clamp(view.scale*WU/4,9,12))}px ${getComputedStyle(document.body).getPropertyValue("--font-mono")||"monospace"}`;ctx.textAlign="center";ctx.textBaseline="middle";
-    for(const q of doc.polys){let txt=null;if(opts.viewMode==="floor")txt=fmt(q.floor);else if(opts.viewMode==="ceil")txt=fmt(q.ceil);else if(opts.viewMode==="light"){const lv=polyLightValue(q,opts.lightTarget);txt=lv.t!=null?"#"+lv.t:lv.p+"%";}else if(opts.viewMode==="type"&&q.type)txt=TYPE_NAME[q.type];else if(opts.viewMode==="liquid"&&q.media)txt=mediaLabel(q.media);
+    for(const q of doc.polys){if(!V.polys.has(q))continue;let txt=null;if(opts.viewMode==="floor")txt=fmt(q.floor);else if(opts.viewMode==="ceil")txt=fmt(q.ceil);else if(opts.viewMode==="light"){const lv=polyLightValue(q,opts.lightTarget);txt=lv.t!=null?"#"+lv.t:lv.p+"%";}else if(opts.viewMode==="type"&&q.type)txt=TYPE_NAME[q.type];else if(opts.viewMode==="liquid"&&q.media)txt=mediaLabel(q.media);
       if(!txt)continue;const c=centroid(q.verts);const [x,y]=toS(c.x,c.y);const tw=ctx.measureText(txt).width+8;const xs=q.verts.map(v=>v.x),ys=q.verts.map(v=>v.y);if((Math.max(...xs)-Math.min(...xs))*view.scale<tw+2||(Math.max(...ys)-Math.min(...ys))*view.scale<18)continue;
       ctx.fillStyle=pal.panel;ctx.globalAlpha=.85;ctx.fillRect(x-tw/2,y-8,tw,16);ctx.globalAlpha=1;ctx.fillStyle=pal.fg;ctx.fillText(txt,x,y+.5);}}
   // teleporter arrows
-  for(const q of doc.polys)if(q.type===10&&doc.polys[q.perm]){const a=centroid(q.verts),b=centroid(doc.polys[q.perm].verts);const [x0,y0]=toS(a.x,a.y),[x1,y1]=toS(b.x,b.y);ctx.strokeStyle="#30b5a8";ctx.setLineDash([3,3]);ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();ctx.setLineDash([]);}
+  for(const q of doc.polys)if(q.type===10&&doc.polys[q.perm]&&V.polys.has(q)){const a=centroid(q.verts),b=centroid(doc.polys[q.perm].verts);const [x0,y0]=toS(a.x,a.y),[x1,y1]=toS(b.x,b.y);ctx.strokeStyle="#30b5a8";ctx.setLineDash([3,3]);ctx.lineWidth=1.5;ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();ctx.setLineDash([]);}
   // map annotations (Forge's text notes)
   // labels (EXTRACT, LOOT…) are coloured tags; other notes are plain italic text. The dot is the anchor point.
   if(doc.notes&&doc.notes.length){const selN=sel.kind==="note"?new Set(sel.items):new Set();ctx.textAlign="left";ctx.textBaseline="middle";
-    for(const nt of doc.notes){if(!noteShown(nt))continue;const b=noteBox(nt),li=labelInfo(nt.text),hl=selN.has(nt)||hover===nt;
+    for(const nt of doc.notes){if(!noteShown(nt)||!V.notes.has(nt))continue;const b=noteBox(nt),li=labelInfo(nt.text),hl=selN.has(nt)||hover===nt;
       ctx.globalAlpha=li?.95:.8;ctx.fillStyle=li?li[2]:pal.panel;ctx.fillRect(b.x,b.y,b.w,b.h);ctx.globalAlpha=1;
       if(hl){ctx.strokeStyle=pal.accent;ctx.lineWidth=2;ctx.strokeRect(b.x-1,b.y-1,b.w+2,b.h+2);}
       ctx.font=li?NOTE_FONT_L():NOTE_FONT();ctx.fillStyle=li?"#fff":pal.fg;ctx.fillText(nt.text,b.x+(li?9:3),b.y+b.h/2+.5);
       const [x,y]=toS(nt.x,nt.y);ctx.fillStyle=li?"#fff":pal.fg;ctx.beginPath();ctx.arc(x+(li?4:0),y,li?2:1.5,0,Math.PI*2);ctx.fill();}}
   // objects
   const selObj=sel.kind==="obj"?new Set(sel.items):new Set();
-  for(const o of doc.objs)drawObj(o,selObj.has(o)||hover===o);
+  for(const o of doc.objs)if(V.objs.has(o))drawObj(o,selObj.has(o)||hover===o);
+  drawTeleLink();
   drawPlacing();
   // in-progress drawing
   if(tool==="line"&&chain.length){const last=chain[chain.length-1];const [x0,y0]=toS(last.x,last.y);const t=snapPoint(cursorW);const [x1,y1]=toS(t.x,t.y);
@@ -1186,16 +1188,17 @@ function hitNote(sx,sy){const ns=doc.notes||[];for(let i=ns.length-1;i>=0;i--){i
 function hitTest(sx,sy){
   const w=toW(sx,sy),tol=8/view.scale;
   let best=null,bd=Infinity;
-  for(const o of doc.objs){const d=hyp(o.x,o.y,w.x,w.y);if(d<tol*1.3&&d<bd){bd=d;best=o;}}if(best)return {kind:"obj",item:best};
-  {const n=hitNote(sx,sy);if(n)return {kind:"note",item:n};}
-  for(const p of doc.pts){const d=hyp(p.x,p.y,w.x,w.y);if(d<tol&&d<bd){bd=d;best=p;}}if(best)return {kind:"point",item:best};
-  for(const l of doc.lines){const d=distSeg(w,l.a,l.b);if(d<tol*.8&&d<bd){bd=d;best=l;}}if(best)return {kind:"line",item:best};
-  const q=polyAtPoint(w);if(q)return {kind:"poly",item:q};
+  const V=layerVis();
+  for(const o of doc.objs){if(!V.objs.has(o))continue;const d=hyp(o.x,o.y,w.x,w.y);if(d<tol*1.3&&d<bd){bd=d;best=o;}}if(best)return {kind:"obj",item:best};
+  {const n=hitNote(sx,sy);if(n&&V.notes.has(n))return {kind:"note",item:n};}
+  for(const p of doc.pts){if(!V.pts.has(p))continue;const d=hyp(p.x,p.y,w.x,w.y);if(d<tol&&d<bd){bd=d;best=p;}}if(best)return {kind:"point",item:best};
+  for(const l of doc.lines){if(!V.lines.has(l))continue;const d=distSeg(w,l.a,l.b);if(d<tol*.8&&d<bd){bd=d;best=l;}}if(best)return {kind:"line",item:best};
+  const q=shownPolyAt(w);if(q)return {kind:"poly",item:q};
   return null;
 }
 function snapPoint(w,exclude){
   const tol=9/view.scale;let best=null,bd=tol;
-  for(const p of doc.pts){if(p===exclude)continue;const d=hyp(p.x,p.y,w.x,w.y);if(d<bd){bd=d;best=p;}}
+  const V=layerVis();for(const p of doc.pts){if(p===exclude||!V.pts.has(p))continue;const d=hyp(p.x,p.y,w.x,w.y);if(d<bd){bd=d;best=p;}}
   if(best)return {x:best.x,y:best.y,pt:best};
   if(opts.snap){const g=opts.grid;return {x:Math.round(w.x/g)*g,y:Math.round(w.y/g)*g};}
   return {x:Math.round(w.x),y:Math.round(w.y)};
@@ -1238,10 +1241,11 @@ canvas.addEventListener("pointerdown",e=>{
     pushUndo();const r=fillAt(w.x,w.y);if(r.poly){setSel("poly",[r.poly]);status("Filled a new polygon.");changed();}else{undoStack.pop();status(r.err);}
   } else if(tool==="object"){
     const t=opts.snap?{x:Math.round(w.x/64)*64,y:Math.round(w.y/64)*64}:{x:Math.round(w.x),y:Math.round(w.y)};
-    if(!polyAtPoint(t)){status("Objects must be placed inside a polygon.");return;}
+    if(!shownPolyAt(t)){status("Objects must be placed inside a polygon.");return;}
     pushUndo();const sub=opts.objKind===0?opts.objSub:opts.objKind===2?opts.objItem:0;
     const o={kind:opts.objKind,sub,x:t.x,y:t.y,z:0,facing:0,flags:0};doc.objs.push(o);setSel("obj",[o]);
     drag={type:"face",obj:o};changed();
+  } else if(tool==="tele"){teleClick(w);
   } else if(tool==="note"){
     const h=hitNote(sx,sy);
     if(h){setSel("note",[h]);drag={type:"move",kind:"note",start:w,movers:[h],orig:[{x:h.x,y:h.y}],moved:false,anchor:h};return;}
@@ -1313,7 +1317,7 @@ document.addEventListener("keydown",e=>{
   if(mod&&k==="z"){e.preventDefault();e.shiftKey?redo():undo();return;}
   if(mod&&k==="y"){e.preventDefault();redo();return;}
   if(mod&&k==="s"){e.preventDefault();saveProject();return;}
-  if(mod&&k==="a"){e.preventDefault();setSel("poly",[...doc.polys]);return;}
+  if(mod&&k==="a"){e.preventDefault();setSel("poly",doc.polys.filter(polyShown));return;}
   if(mod)return;
   if(k===" "){spaceDown=true;canvas.style.cursor="grab";e.preventDefault();return;}
   if(placing){
@@ -1324,8 +1328,10 @@ document.addEventListener("keydown",e=>{
     if(["arrowleft","arrowright","arrowup","arrowdown"].includes(k)){e.preventDefault();const g=e.shiftKey?WU:opts.grid;placing.tx+=k==="arrowleft"?-g:k==="arrowright"?g:0;placing.ty+=k==="arrowup"?-g:k==="arrowdown"?g:0;refreshPlaceBox();redraw();return;}
     if(!["0","=","+","-","g"].includes(k))return;
   }
-  const tmap={v:"select",l:"line",r:"rect",f:"fill",o:"object",n:"note",h:"pan"};
+  if(k==="pageup"||k==="pagedown"){e.preventDefault();stepLayer(k==="pageup"?1:-1);return;}
+  const tmap={v:"select",l:"line",r:"rect",f:"fill",o:"object",n:"note",h:"pan",t:"tele"};
   if(tmap[k]){setTool(tmap[k]);return;}
+  if(k==="escape"&&teleFrom){teleFrom=null;status("Teleporter link cancelled.");redraw();return;}
   if(k==="escape"&&vpaint){disarmPaint();return;}
   if(k==="escape"||k==="enter"){if(chain.length){chain=[];status("Line finished.");redraw();}else setSel(null,[]);return;}
   if(k==="delete"||k==="backspace"){e.preventDefault();deleteSelection(e.shiftKey);return;}
@@ -1360,11 +1366,12 @@ const ICONS={
   fill:'<path d="M4 18l7-12 7 12z"/><path d="M8 15h8M10 12h4"/>',
   object:'<path d="M12 3l7 9-7 9-7-9z"/>',
   note:'<path d="M4 5h16v10H10l-4 4v-4H4z"/><path d="M8 9h8M8 12h5"/>',
+  tele:'<circle cx="7" cy="7" r="3"/><circle cx="17" cy="17" r="3"/><path d="M9.5 9.5l5 5M14 14.5v-2.5M14 14.5h-2.5" />',
   pan:'<path d="M12 3v18M3 12h18M12 3l-3 3M12 3l3 3M12 21l-3-3M12 21l3-3M3 12l3-3M3 12l3 3M21 12l-3-3M21 12l-3 3"/>',
   fit:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   zin:'<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5L20 20M8.5 11h5M11 8.5v5"/>',
   zout:'<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5L20 20M8.5 11h5"/>'};
-const TOOLS=[["select","Select & move","V"],["line","Draw lines","L"],["rect","Room (rectangle)","R"],["fill","Fill polygon","F"],["object","Place object","O"],["note","Labels & notes","N"],["pan","Pan","H"]];
+const TOOLS=[["select","Select & move","V"],["line","Draw lines","L"],["rect","Room (rectangle)","R"],["fill","Fill polygon","F"],["object","Place object","O"],["note","Labels & notes","N"],["tele","Link with teleporter","T"],["pan","Pan","H"]];
 function renderTools(){
   const el=$("tools");el.innerHTML="";
   for(const [id,label,k] of TOOLS){const b=document.createElement("button");b.className="tool";b.title=`${label} (${k})`;b.setAttribute("aria-label",label);b.setAttribute("aria-pressed",tool===id);
@@ -1380,8 +1387,9 @@ const HINTS={
   fill:"Click inside a closed loop of lines to turn it into a polygon.",
   object:"Click inside a polygon to place the object chosen above. Drag while placing to set its facing.",
   note:"Click to place the label or note chosen above; drag a note to move it. Extraction labels go inside ordinary walkable floor.",
-  pan:"Drag to move around. Scroll or pinch to zoom."};
-function setTool(t){tool=t;chain=[];renderTools();renderOptbar();$("hint").textContent=HINTS[t];if(t!=="select")vpaint=null;if(typeof renderVPal==="function"){renderVPal();updatePaintHint();}canvas.style.cursor=t==="pan"?"grab":t==="select"?"default":"crosshair";redraw();}
+  pan:"Drag to move around. Scroll or pinch to zoom.",
+  tele:"Link with teleporter: click the pad (the polygon you stand on to teleport), then click where you land. Switch layers in between with PageUp/PageDown. Don't land on another pad: in the game you teleport after standing still on a pad, so you'd bounce back."};
+function setTool(t){tool=t;chain=[];if(t!=="tele")teleFrom=null;renderTools();renderOptbar();$("hint").textContent=HINTS[t];if(t!=="select")vpaint=null;if(typeof renderVPal==="function"){renderVPal();updatePaintHint();}canvas.style.cursor=t==="pan"?"grab":t==="select"?"default":"crosshair";redraw();}
 function setViewMode(m){opts.viewMode=m;if(vpaint&&vpaint.mode!==m)vpaint=null;renderOptbar();renderLegend();renderVPal();updatePaintHint();redraw();}
 function sel_(id,options,value,onchange){const s=document.createElement("select");s.id=id;for(const [v,l] of options){const o=document.createElement("option");o.value=v;o.textContent=l;s.appendChild(o);}s.value=String(value);s.onchange=()=>onchange(s.value);return s;}
 function renderOptbar(){
@@ -1389,6 +1397,7 @@ function renderOptbar(){
   const vm=document.createElement("div");vm.className="viewmodes";vm.setAttribute("role","group");vm.setAttribute("aria-label","Map view");
   for(const [m,l] of [["draw","Draw"],["tex","Texture"],["floor","Floor"],["ceil","Ceiling"],["light","Light"],["type","Type"],["liquid","Liquid"]]){const b=document.createElement("button");b.textContent=l;b.title=`${l} view`;b.setAttribute("aria-pressed",opts.viewMode===m);b.onclick=()=>setViewMode(m);vm.appendChild(b);}
   el.appendChild(vm);
+  el.appendChild(layerControl());
   const grid=document.createElement("label");grid.innerHTML='<span class="lbl">Grid</span>';grid.appendChild(sel_("optGrid",GRIDS,opts.grid,v=>{opts.grid=+v;savePrefs();redraw();}));el.appendChild(grid);
   const sn=document.createElement("label");sn.innerHTML=`<input type="checkbox" id="optSnap" ${opts.snap?"checked":""}> Snap`;sn.querySelector("input").onchange=e=>{opts.snap=e.target.checked;savePrefs();};el.appendChild(sn);
   const sv=document.createElement("label");sv.innerHTML=`<input type="checkbox" id="optVals" ${opts.showValues?"checked":""}> Values`;sv.querySelector("input").onchange=e=>{opts.showValues=e.target.checked;savePrefs();redraw();};el.appendChild(sv);
@@ -3225,7 +3234,8 @@ function drawPlacing(){
   for(const o of B.objs){const p=placeXY(o);const [x,y]=toS(p.x,p.y);ctx.fillStyle=o.kind===3?"#2fa860":"#888";ctx.fillRect(x-2,y-2,4,4);}
   const b=placingBounds();const [lx,ly]=toS(b.x0,b.y0);
   ctx.font="600 12px "+(getComputedStyle(document.body).getPropertyValue("--font-ui")||"sans-serif");ctx.textAlign="left";ctx.textBaseline="bottom";ctx.fillStyle=ok?pal.fg:pal.danger;
-  ctx.fillText(`${placing.name}${placing.dz?`  (height ${placing.dz>0?"+":""}${fmt(placing.dz)} WU)`:""}${ok?"":"  · outside the map area"}`,lx,ly-4);
+  const fr=floorRange(B.polys,placing.dz),ar=floorRange(doc.polys,0);const clash=ar&&fr&&fr.lo<=ar.hi&&fr.hi>=ar.lo;
+  ctx.fillText(`${placing.name}${placing.dz?`  (raised ${placing.dz>0?"+":""}${fmt(placing.dz)} WU)`:""}  · floors ${fmt(fr.lo)} to ${fmt(fr.hi)} WU${clash?` (this map: ${fmt(ar.lo)} to ${fmt(ar.hi)}, same heights)`:""}${ok?"":"  · outside the map area"}`,lx,ly-4);
   ctx.restore();
 }
 function dropPlacing(){
@@ -3258,11 +3268,17 @@ function dropPlacing(){
 function finishMerge(choice){
   if(!placing)return;
   pushUndo();
+  const aName=doc.info.name,ar=floorRange(doc.polys,0),br=floorRange(placing.B.polys,placing.dz);
   const r=mergeInto(doc,placing.B,placing,choice);
+  // a layer per map, so each can be hidden while the connectors are built
+  const L=doc.info.layers||(doc.info.layers=[]);
+  if(ar&&!L.length)L.push({name:aName,lo:ar.lo,hi:ar.hi});
+  if(br)L.push({name:placing.name,lo:br.lo,hi:br.hi});
+  const sameHeights=ar&&br&&br.lo<=ar.hi&&br.hi>=ar.lo;
   const name=placing.name;placing=null;hidePlaceBox();
   resetPolyRefs();changed();
   const msg=[`Added “${name}”: ${r.polys} polygons, ${r.objs} objects.`];
-  if(r.polyTotal>1024)msg.push(`The level now has ${r.polyTotal} polygons, more than the original games allowed (1024). Test it in Aleph One.`);
+  msg.push(sameHeights?"Both maps use the same heights, so their layers overlap; raise one (select it, [ ]) to hide them separately.":"Each map is now a layer (Layer menu above the map, PageUp/PageDown).");
   if(r.rotatedFloors)msg.push("Floor and ceiling textures can't turn in Marathon, so the added map's floor patterns now run the other way.");
   status(msg[0]);toast(msg.join(" "));
 }
@@ -3327,6 +3343,77 @@ function mergeInto(A,B,P,choice={}){
   A.notes=[...(A.notes||[]),...(B.notes||[])];A.terms=[...(A.terms||[]),...(B.terms||[])];
   return {polys:B.polys.length,objs:B.objs.length,polyTotal:A.polys.length,rotatedFloors:!!rot};
 }
+// =============================================================== layers (show one height range at a time)
+// A layer is a floor-height range saved with the level (info.layers). Picking one hides every polygon whose floor is
+// outside it, with its lines, points, objects and notes, so overlapping or stacked parts can be edited apart.
+// New rooms go in at the layer's floor height. The game never sees layers.
+let layerIdx=-1,visCache=null;
+function curLayer(){const L=doc.info.layers||[];return layerIdx>=0&&layerIdx<L.length?L[layerIdx]:null;}
+function polyShown(q){const L=curLayer();return !L||(q.floor>=L.lo&&q.floor<=L.hi);}
+function shownPolyAt(p){for(let i=doc.polys.length-1;i>=0;i--){const q=doc.polys[i];if(polyShown(q)&&pointInPoly(p,q.verts))return q;}return null;}
+function floorRange(polys,dz){if(!polys.length)return null;let lo=Infinity,hi=-Infinity;for(const q of polys){lo=Math.min(lo,q.floor+dz);hi=Math.max(hi,q.floor+dz);}return {lo,hi};}
+function newHeights(){let f=opts.newFloor??0,c=opts.newCeil??WU;const L=curLayer();if(L&&(f<L.lo||f>L.hi)){c=L.lo+(c-f);f=L.lo;}return {floor:f,ceil:c};}
+function layerVis(){
+  const L=curLayer();
+  if(!L)return {all:true,polys:{has:()=>true},lines:{has:()=>true},pts:{has:()=>true},objs:{has:()=>true},notes:{has:()=>true}};
+  const polys=new Set(doc.polys.filter(polyShown)),pts=new Set(),usedPts=new Set(),lines=new Set();
+  for(const q of doc.polys)for(const v of q.verts){usedPts.add(v);if(polys.has(q))pts.add(v);}
+  const edge=new Map();for(const q of doc.polys)q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];const key=Math.min(a.id,b.id)+"-"+Math.max(a.id,b.id);if(!edge.has(key))edge.set(key,[]);edge.get(key).push(q);});
+  for(const l of doc.lines){const own=edge.get(Math.min(l.a.id,l.b.id)+"-"+Math.max(l.a.id,l.b.id));
+    // lines with no polygon yet (being drawn) show unless both ends belong only to hidden polygons
+    if(own?own.some(q=>polys.has(q)):(!usedPts.has(l.a)||pts.has(l.a))&&(!usedPts.has(l.b)||pts.has(l.b))){lines.add(l);pts.add(l.a);pts.add(l.b);}}
+  for(const p of doc.pts)if(!usedPts.has(p))pts.add(p);
+  const inShown=o=>{const q=objPoly(o);return q?polys.has(q):true;};
+  const objs=new Set(doc.objs.filter(inShown));
+  const notes=new Set((doc.notes||[]).filter(nt=>{const q=polyAtPoint(nt);return !q||polys.has(q)||!!shownPolyAt(nt);}));
+  return {all:false,polys,lines,pts,objs,notes};
+}
+function setLayer(i){const L=doc.info.layers||[];layerIdx=i>=0&&i<L.length?i:-1;
+  if(sel.kind==="poly")sel.items=sel.items.filter(polyShown);
+  renderOptbar();const c=curLayer();status(c?`Layer “${c.name}”: floors ${fmt(c.lo)} to ${fmt(c.hi)} WU. Everything else is hidden (PageUp/PageDown to switch).`:"Showing all heights.");renderPane();redraw();}
+function stepLayer(d){const n=(doc.info.layers||[]).length;if(!n){status("No layers yet. Use the Layer menu above the map to make one.");return;}let i=layerIdx+d;if(i>=n)i=-1;if(i<-1)i=n-1;setLayer(i);}
+function layerControl(){
+  const lab=document.createElement("label");lab.innerHTML='<span class="lbl">Layer</span>';
+  const L=doc.info.layers||[];if(layerIdx>=L.length)layerIdx=-1;
+  const options=[["-1","All heights"],...L.map((l,i)=>[String(i),`${l.name} (${fmt(l.lo)} to ${fmt(l.hi)})`]),["new","New layer…"],["edit","Edit layers…"]];
+  const s=sel_("optLayer",options,String(layerIdx),v=>{if(v==="new"){openLayerEditor(true);s.value=String(layerIdx);return;}if(v==="edit"){openLayerEditor(false);s.value=String(layerIdx);return;}setLayer(+v);});
+  s.title="Show one height range at a time (PageUp/PageDown)";lab.appendChild(s);return lab;}
+function openLayerEditor(addOne){
+  const L=(doc.info.layers||[]).map(l=>({...l}));
+  if(addOne){const sp=sel.kind==="poly"&&sel.items.length?sel.items:null;const r=floorRange(sp||doc.polys,0)||{lo:0,hi:0};L.push({name:sp?"Selected rooms":`Layer ${L.length+1}`,lo:r.lo,hi:r.hi});}
+  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="8px";
+  const n=document.createElement("p");n.className="note";n.textContent="Each layer shows only the rooms whose floor is in its height range (in WU). Adding a map makes a layer for each map. Tip: select some rooms first, then New layer… takes their heights.";body.appendChild(n);
+  const list=document.createElement("div");list.style.display="flex";list.style.flexDirection="column";list.style.gap="6px";body.appendChild(list);
+  const render=()=>{list.innerHTML="";L.forEach((l,i)=>{const row=document.createElement("div");row.className="row";row.style.alignItems="center";row.style.gap="6px";
+    const nm=document.createElement("input");nm.value=l.name;nm.id="lyName"+i;nm.style.flex="1";nm.oninput=()=>l.name=nm.value;row.appendChild(nm);
+    for(const [k,lb] of [["lo","from"],["hi","to"]]){row.append(lb);const x=document.createElement("input");x.type="number";x.step="0.125";x.id=`ly${k}${i}`;x.style.width="70px";x.value=(l[k]/WU).toFixed(3);x.onchange=()=>{const v=parseFloat(x.value);if(isFinite(v))l[k]=Math.round(v*WU);};row.appendChild(x);}
+    const del=button("✕",()=>{L.splice(i,1);render();});del.title="Remove layer";row.appendChild(del);list.appendChild(row);});
+    if(!L.length){const e=document.createElement("p");e.className="note";e.textContent="No layers.";list.appendChild(e);}};
+  render();
+  const add=button("Add layer",()=>{L.push({name:`Layer ${L.length+1}`,lo:0,hi:WU});render();});
+  openModal(addOne?"New layer":"Layers",body,[add,button("Cancel",closeModal),button("Save",()=>{
+    for(const l of L){if(l.lo>l.hi)[l.lo,l.hi]=[l.hi,l.lo];l.name=(l.name||"Layer").slice(0,40);}
+    pushUndo();doc.info.layers=L;closeModal();changed();setLayer(addOne?L.length-1:Math.min(layerIdx,L.length-1));},"primary")]);
+}
+
+// =============================================================== link with teleporter (tool T)
+// Click a pad, then where you land. The pad becomes a teleporter (polygon type 10) pointing at the landing polygon.
+let teleFrom=null;
+function teleClick(w){
+  const q=shownPolyAt(w);
+  if(!teleFrom){if(!q){status("Click inside the polygon that should be the teleporter pad.");return;}
+    teleFrom=q;status(`Pad: polygon ${doc.polys.indexOf(q)}. Now click where the player lands (PageUp/PageDown switches layers). Esc cancels.`);redraw();return;}
+  if(!q){status("Click inside the polygon where the player should land.");return;}
+  if(q===teleFrom){status("The landing spot has to be a different polygon.");return;}
+  pushUndo();const pad=teleFrom;teleFrom=null;
+  pad.type=10;pad.perm=doc.polys.indexOf(q);delete pad.plat;
+  const warn=q.type===10?" The landing spot is a pad too: players would bounce straight back. Land next to the other pad instead.":"";
+  setSel("poly",[pad]);changed();toast(`Teleporter: polygon ${doc.polys.indexOf(pad)} → polygon ${pad.perm}. In the game, stand still on the pad to teleport.${warn}`);
+}
+function drawTeleLink(){if(tool!=="tele"||!teleFrom||!doc.polys.includes(teleFrom))return;
+  const c=centroid(teleFrom.verts);const [x0,y0]=toS(c.x,c.y),[x1,y1]=toS(cursorW.x,cursorW.y);
+  ctx.save();ctx.beginPath();teleFrom.verts.forEach((v,i)=>{const [x,y]=toS(v.x,v.y);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.closePath();ctx.fillStyle="#30b5a8";ctx.globalAlpha=.35;ctx.fill();
+  ctx.globalAlpha=1;ctx.strokeStyle="#30b5a8";ctx.lineWidth=2;ctx.setLineDash([5,4]);ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();ctx.restore();}
 // When a level's main wall set changes, surfaces that used the old one get it written down (like any other set's texture).
 function rehomeTextures(d,fromEnv,toEnv){
   if(fromEnv===toEnv)return;const from=17+fromEnv,to=17+toEnv;
@@ -3632,7 +3719,7 @@ requestAnimationFrame(()=>{resize();fitView();});
         clearTimeout(scenTimer);try{await idb.put("scenario",serializeScenario());}catch(e){}location.replace(location.pathname+"?v="+encodeURIComponent(v));return;}}}catch(e){}
     busy=false;};
   setInterval(check,4000);window.addEventListener("focus",check);})();
-window.__forge={scenario,openAddMap,addMapFromBuffer,startPlacing,dropPlacing,finishMerge,mergeInto,get placing(){return placing;},switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;resetPolyRefs();changed();}};
+window.__forge={scenario,setLayer,layerVis,teleClick,get layer(){return curLayer();},openAddMap,addMapFromBuffer,startPlacing,dropPlacing,finishMerge,mergeInto,get placing(){return placing;},switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;resetPolyRefs();changed();}};
 Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
   makePolygonFromCoords,addPointAt,addSegment,fillAt,objPoly,
   screenOf(x,y){const r=canvas.getBoundingClientRect();const [sx,sy]=toS(x,y);return {x:r.left+sx,y:r.top+sy};},centroid,fitView});
