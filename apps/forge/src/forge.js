@@ -1149,6 +1149,7 @@ function draw(){
   // objects
   const selObj=sel.kind==="obj"?new Set(sel.items):new Set();
   for(const o of doc.objs)drawObj(o,selObj.has(o)||hover===o);
+  drawPlacing();
   // in-progress drawing
   if(tool==="line"&&chain.length){const last=chain[chain.length-1];const [x0,y0]=toS(last.x,last.y);const t=snapPoint(cursorW);const [x1,y1]=toS(t.x,t.y);
     ctx.strokeStyle=pal.accent;ctx.lineWidth=2;ctx.setLineDash([6,4]);ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();ctx.setLineDash([]);
@@ -1207,6 +1208,7 @@ canvas.addEventListener("pointerdown",e=>{
   if(pointers.size===2){const [a,b]=[...pointers.values()];pinch={d:hyp(a.x,a.y,b.x,b.y),mid:{x:(a.x+b.x)/2,y:(a.y+b.y)/2},scale:view.scale,c:{x:view.cx,y:view.cy}};drag=null;return;}
   const sx=e.offsetX,sy=e.offsetY,w=toW(sx,sy);cursorW=w;
   if(e.button===1||e.button===2||tool==="pan"||spaceDown){drag={type:"pan",sx,sy,cx:view.cx,cy:view.cy};return;}
+  if(placing){drag={type:"place",start:w,tx:placing.tx,ty:placing.ty};return;}
   if(tool==="select"&&PALETTE_MODES.includes(opts.viewMode)&&(vpaint||e.altKey)){
     const q=polyAtPoint(w);
     if(e.altKey){if(q){armPaint(opts.viewMode,samplePoly(opts.viewMode,q));status("Picked up the polygon's value. Click or drag to paint it.");}return;}
@@ -1265,6 +1267,8 @@ canvas.addEventListener("pointermove",e=>{
       drag.movers.forEach((m,i)=>{m.x=Math.round(drag.orig[i].x+dx);m.y=Math.round(drag.orig[i].y+dy);});
       refreshInspectorValues();
     } else if(drag.type==="rect"){const t=snapPoint(w);drag.cur={x:t.x,y:t.y};}
+    else if(drag.type==="place"&&placing){let dx=w.x-drag.start.x,dy=w.y-drag.start.y;if(opts.snap){const g=opts.grid;dx=Math.round(dx/g)*g;dy=Math.round(dy/g)*g;}else{dx=Math.round(dx);dy=Math.round(dy);}
+      placing.tx=drag.tx+dx;placing.ty=drag.ty+dy;refreshPlaceBox();}
     else if(drag.type==="paint"){if(paintAt(w)){drag.did=true;issues=validate();renderVPal();}}
     else if(drag.type==="face"){const o=drag.obj;const d=hyp(o.x,o.y,w.x,w.y);if(d*view.scale>10){o.facing=Math.round(Math.atan2(w.y-o.y,w.x-o.x)*180/Math.PI/15)*15;o.facing=(o.facing+360)%360;refreshInspectorValues();}}
   } else if(tool==="select"&&!isTouch){const h=hitTest(sx,sy);const nh=h?h.item:null;if(nh!==hover){hover=nh;}}
@@ -1312,6 +1316,14 @@ document.addEventListener("keydown",e=>{
   if(mod&&k==="a"){e.preventDefault();setSel("poly",[...doc.polys]);return;}
   if(mod)return;
   if(k===" "){spaceDown=true;canvas.style.cursor="grab";e.preventDefault();return;}
+  if(placing){
+    if(k==="r"){rotatePlacing(e.shiftKey?-1:1);return;}
+    if(k==="escape"){cancelPlacing();return;}
+    if(k==="enter"){e.preventDefault();dropPlacing();return;}
+    if(k==="["||k==="]"){placing.dz+=(k==="]"?1:-1)*(e.shiftKey?WU/8:WU/4);refreshPlaceBox();redraw();return;}
+    if(["arrowleft","arrowright","arrowup","arrowdown"].includes(k)){e.preventDefault();const g=e.shiftKey?WU:opts.grid;placing.tx+=k==="arrowleft"?-g:k==="arrowright"?g:0;placing.ty+=k==="arrowup"?-g:k==="arrowdown"?g:0;refreshPlaceBox();redraw();return;}
+    if(!["0","=","+","-","g"].includes(k))return;
+  }
   const tmap={v:"select",l:"line",r:"rect",f:"fill",o:"object",n:"note",h:"pan"};
   if(tmap[k]){setTool(tmap[k]);return;}
   if(k==="escape"&&vpaint){disarmPaint();return;}
@@ -2901,7 +2913,7 @@ function renderLevels(p){
       const x=button(lab,fn);x.title=title;x.setAttribute("aria-label",`${title} level ${i}`);ctl.appendChild(x);}
     row.appendChild(ctl);list.appendChild(row);});
   gl.appendChild(list);
-  const r=document.createElement("div");r.className="row";r.appendChild(button("New level…",openNewLevel));r.appendChild(button("Open map file…",()=>$("fileIn").click()));gl.appendChild(r);
+  const r=document.createElement("div");r.className="row";r.appendChild(button("New level…",openNewLevel));r.appendChild(button("Open map file…",()=>$("fileIn").click()));r.appendChild(button("Add a map to this map…",openAddMap));gl.appendChild(r);
   const nn=document.createElement("p");nn.className="note";nn.textContent="Level order is play order. Terminals send players to a level by its number here.";gl.appendChild(nn);p.appendChild(gl);
   const gp=group("Pictures");const pn=document.createElement("p");pn.className="note";const ch=scenario.pictures.filter(x=>picKind(x.id)==="chapter").length;
   pn.textContent=`${scenario.pictures.length} picture${scenario.pictures.length===1?"":"s"}: ${ch} chapter screen${ch===1?"":"s"}, the rest for terminals.`;gp.appendChild(pn);gp.appendChild(button("Manage pictures…",openPictures));p.appendChild(gp);
@@ -3127,6 +3139,206 @@ function openWholeMap(wad,lv,fname){
   const N=curLevel();doc=N.doc;undoStack=N.undo;redoStack=N.redo;resetPolyRefs();
   afterLoad(`Opened ${levels.length} levels and ${scenario.pictures.length} pictures from ${fname}.`);fitView();saveScenarioSoon();setTab("levels");
   if(notes.size)toast([...notes].join("; "));
+}
+
+// =============================================================== add a map to this map (merge two levels into one)
+// Pick a level (from this scenario or a map file), place it as a ghost (drag, quarter turns, height), then drop it in.
+// Everything that points at polygons, lights, terminals, sounds or tags is renumbered so the two maps don't clash.
+let placing=null; // {B, name, cx, cy, tx, ty, dz, rot}
+function openAddMap(){
+  if(placing){toast("Finish placing the map you're adding first (Enter places it, Esc cancels).");return;}
+  syncLevel();
+  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="10px";
+  const n=document.createElement("p");n.className="note";n.textContent="Pick a map to add into this one. You'll place it next: drag it where you want, turn it with R, raise or lower it with [ and ], then press Enter. Then join the two with normal rooms and lines.";body.appendChild(n);
+  if(scenario.levels.length){const h=document.createElement("div");h.className="glabel";h.textContent="From this scenario";body.appendChild(h);
+    const list=document.createElement("div");list.className="levellist";
+    scenario.levels.forEach((L,i)=>{const d=i===scenario.cur?doc:L.doc;list.appendChild(button(`${i}. ${d.info.name}${i===scenario.cur?" (this level: adds a copy)":""}`,()=>{closeModal();startPlacing(deserialize(serialize(d)),d.info.name);}));});
+    body.appendChild(list);}
+  const fin=document.createElement("input");fin.type="file";fin.hidden=true;fin.id="addMapIn";
+  fin.onchange=async()=>{const f=fin.files[0];fin.value="";if(!f)return;try{await addMapFromBuffer(await f.arrayBuffer(),f.name);}catch(e){toast("Couldn't open that file: "+e.message);}};
+  body.appendChild(fin);
+  openModal("Add a map to this map",body,[button("Cancel",closeModal),button("From a map file…",()=>fin.click(),"primary")]);
+}
+async function addMapFromBuffer(buf,fname){
+  const head=new TextDecoder().decode(new Uint8Array(buf.slice(0,200))).trim();
+  let picks=[];
+  if(head.startsWith("{")){const o=JSON.parse(new TextDecoder().decode(buf));
+    if(o.format==="forge-scenario")picks=(o.levels||[]).map(s=>{const d=deserialize(s);return {name:d.info.name,get:()=>d};});
+    else{const d=deserialize(o);picks=[{name:d.info.name,get:()=>d}];}}
+  else{const wad=parseWad(buf);picks=wad.levels.filter(l=>l.chunks.POLY).map(l=>({name:l.name,get:()=>levelToDoc(l).doc}));}
+  if(!picks.length)throw new Error("no levels found in it");
+  if(picks.length===1){closeModal();startPlacing(picks[0].get(),picks[0].name);return;}
+  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="10px";
+  const n=document.createElement("p");n.className="note";n.textContent=`${fname} holds ${picks.length} levels. Which one do you want to add?`;body.appendChild(n);
+  const list=document.createElement("div");list.className="levellist";
+  picks.forEach((p,i)=>list.appendChild(button(`${i}. ${p.name}`,()=>{closeModal();startPlacing(p.get(),p.name);})));
+  body.appendChild(list);openModal("Add a map to this map",body,[button("Cancel",closeModal)]);
+}
+function startPlacing(B,name){
+  if(!B.polys.length){toast("That level has no polygons to add.");return;}
+  const xs=B.pts.map(p=>p.x),ys=B.pts.map(p=>p.y),g=WU/8;
+  const cx=Math.round((Math.min(...xs)+Math.max(...xs))/2/g)*g,cy=Math.round((Math.min(...ys)+Math.max(...ys))/2/g)*g;
+  // start to the right of the current map so it doesn't land on top of it
+  // start beside the current map (right, below, left, above) so it doesn't land on top of it; if there's no room, in the middle
+  const R=v=>Math.round(v/WU)*WU;
+  placing={B,name,cx,cy,tx:R(view.cx),ty:R(view.cy),dz:0,rot:0};
+  if(doc.pts.length){const ax=doc.pts.map(p=>p.x),ay=doc.pts.map(p=>p.y);const x0=Math.min(...ax),x1=Math.max(...ax),y0=Math.min(...ay),y1=Math.max(...ay),mx=(x0+x1)/2,my=(y0+y1)/2;
+    const bx0=Math.min(...xs)-cx,bx1=Math.max(...xs)-cx,by0=Math.min(...ys)-cy,by1=Math.max(...ys)-cy,gap=2*WU;
+    const tries=[[x1+gap-bx0,my],[mx,y1+gap-by0],[x0-gap-bx1,my],[mx,y0-gap-by1],[mx,my]];
+    for(const [x,y] of tries){placing.tx=R(x);placing.ty=R(y);if(placingFits())break;}}
+  if(tool!=="select")setTool("select");
+  showPlaceBox();fitPlacing();status(`Placing “${name}”: drag it, R turns it, [ ] raise/lower, Enter places it, Esc cancels.`);
+}
+// where a point of the added map lands
+function placeXY(p,P=placing){const u=p.x-P.cx,v=p.y-P.cy;const r=((P.rot%4)+4)%4;
+  const [a,b]=r===0?[u,v]:r===1?[-v,u]:r===2?[-u,-v]:[v,-u];return {x:Math.round(P.tx+a),y:Math.round(P.ty+b)};}
+function placingBounds(){const ps=placing.B.pts.map(p=>placeXY(p));const xs=ps.map(p=>p.x),ys=ps.map(p=>p.y);return {x0:Math.min(...xs),x1:Math.max(...xs),y0:Math.min(...ys),y1:Math.max(...ys)};}
+function placingFits(){const b=placingBounds();return b.x0>=-MAXC&&b.x1<=MAXC&&b.y0>=-MAXC&&b.y1<=MAXC;}
+function fitPlacing(){const vs=[...doc.pts];const b=placingBounds();vs.push({x:b.x0,y:b.y0},{x:b.x1,y:b.y1});
+  const xs=vs.map(v=>v.x),ys=vs.map(v=>v.y);const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
+  view.cx=(x0+x1)/2;view.cy=(y0+y1)/2;view.scale=clamp(Math.min((W-80)/Math.max(x1-x0,WU),(H-80)/Math.max(y1-y0,WU)),2/WU,120/WU);updateStatus();redraw();}
+function showPlaceBox(){
+  let box=$("placeBox");if(!box){box=document.createElement("div");box.id="placeBox";box.className="placebox";$("canvasbox").appendChild(box);}
+  box.hidden=false;box.innerHTML="";
+  const t=document.createElement("div");t.className="glabel";t.textContent="Adding: "+placing.name;box.appendChild(t);
+  const num=(id,label,get,set)=>{const i=document.createElement("input");i.type="number";i.step="0.125";i.id=id;i.value=(get()/WU).toFixed(3);
+    i.onchange=()=>{const v=parseFloat(i.value);if(isFinite(v)){set(Math.round(v*WU));redraw();}};return field(label,i,"WU");};
+  box.appendChild(num("plX","X",()=>placing.tx,v=>placing.tx=v));
+  box.appendChild(num("plY","Y",()=>placing.ty,v=>placing.ty=v));
+  box.appendChild(num("plZ","Height",()=>placing.dz,v=>placing.dz=v));
+  const r=document.createElement("div");r.className="row";
+  r.appendChild(button("⟲ Turn",()=>rotatePlacing(-1)));r.appendChild(button("⟳ Turn",()=>rotatePlacing(1)));box.appendChild(r);
+  const r2=document.createElement("div");r2.className="row";
+  r2.appendChild(button("Cancel",cancelPlacing));r2.appendChild(button("Place it",dropPlacing,"primary"));box.appendChild(r2);
+  const n=document.createElement("p");n.className="note";n.textContent=`Drag to move · R / Shift+R turns · [ ] height (Shift: 1/8 WU) · Enter places · Esc cancels.${placing.rot?` Turned ${placing.rot*90}°.`:""}`;box.appendChild(n);
+}
+function refreshPlaceBox(){if(!placing)return;for(const [id,v] of [["plX",placing.tx],["plY",placing.ty],["plZ",placing.dz]]){const i=$(id);if(i&&document.activeElement!==i)i.value=(v/WU).toFixed(3);}}
+function hidePlaceBox(){const b=$("placeBox");if(b)b.hidden=true;}
+function rotatePlacing(d){placing.rot=((placing.rot+d)%4+4)%4;showPlaceBox();redraw();}
+function cancelPlacing(){placing=null;hidePlaceBox();status("Adding the map was cancelled.");redraw();}
+function drawPlacing(){
+  if(!placing)return;const B=placing.B;const ok=placingFits();
+  ctx.save();
+  for(const q of B.polys){ctx.beginPath();q.verts.forEach((v,i)=>{const p=placeXY(v);const [x,y]=toS(p.x,p.y);i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.closePath();
+    ctx.fillStyle=ok?pal.accent:pal.danger;ctx.globalAlpha=.22;ctx.fill();ctx.globalAlpha=.9;ctx.strokeStyle=ok?pal.accent:pal.danger;ctx.lineWidth=1.2;ctx.stroke();}
+  ctx.globalAlpha=1;
+  for(const o of B.objs){const p=placeXY(o);const [x,y]=toS(p.x,p.y);ctx.fillStyle=o.kind===3?"#2fa860":"#888";ctx.fillRect(x-2,y-2,4,4);}
+  const b=placingBounds();const [lx,ly]=toS(b.x0,b.y0);
+  ctx.font="600 12px "+(getComputedStyle(document.body).getPropertyValue("--font-ui")||"sans-serif");ctx.textAlign="left";ctx.textBaseline="bottom";ctx.fillStyle=ok?pal.fg:pal.danger;
+  ctx.fillText(`${placing.name}${placing.dz?`  (height ${placing.dz>0?"+":""}${fmt(placing.dz)} WU)`:""}${ok?"":"  · outside the map area"}`,lx,ly-4);
+  ctx.restore();
+}
+function dropPlacing(){
+  if(!placing)return;
+  if(!placingFits()){toast("Part of the added map is outside the map area. Move it closer to the middle.");return;}
+  const A=doc,B=placing.B;
+  const diffs=[];
+  const physKey=d=>JSON.stringify(d.physics&&d.physics.mode!=="none"?d.physics:{mode:"none"});
+  const physName=d=>!d.physics||d.physics.mode==="none"?"Scenario default":d.physics.mode==="lib"?d.physics.lib:"Its own physics";
+  const bits=(list,v)=>list.filter(([b])=>v&b).map(([,l])=>l).join(", ")||"none";
+  if(A.info.game!==B.info.game)diffs.push({key:"game",label:"Game",a:GAMES[A.info.game].short,b:GAMES[B.info.game].short,note:"Textures come from that game's Shapes file, so the other map's walls may look different."});
+  if(A.info.env!==B.info.env)diffs.push({key:"env",label:"Wall set (environment)",a:envName(A.info.game,A.info.env),b:envName(B.info.game,B.info.env),note:"Both maps keep their own textures either way. This picks the level's main set (new rooms, control panels)."});
+  if(A.info.landscape!==B.info.landscape)diffs.push({key:"landscape",label:"Sky",a:LANDSCAPES[A.info.landscape]||"?",b:LANDSCAPES[B.info.landscape]||"?",note:"The level's sky. Sky surfaces keep the sky texture they had."});
+  if((A.info.envFlags&0x0f)!==(B.info.envFlags&0x0f))diffs.push({key:"envFlags",label:"Vacuum, magnetic, rebellion, low gravity",a:bits(ENV_FLAGS,A.info.envFlags),b:bits(ENV_FLAGS,B.info.envFlags)});
+  if((A.info.envFlags&~0x0f)!==(B.info.envFlags&~0x0f))diffs.push({key:"compat",label:"Marathon 1 settings",a:bits(M1_COMPAT,A.info.envFlags),b:bits(M1_COMPAT,B.info.envFlags)});
+  if(A.info.entry!==B.info.entry)diffs.push({key:"entry",label:"Game types",a:bits(GAME_TYPES,A.info.entry),b:bits(GAME_TYPES,B.info.entry),both:bits(GAME_TYPES,A.info.entry|B.info.entry)});
+  if(A.info.mission!==B.info.mission)diffs.push({key:"mission",label:"Mission",a:bits(MISSIONS,A.info.mission),b:bits(MISSIONS,B.info.mission)});
+  if(physKey(A)!==physKey(B))diffs.push({key:"physics",label:"Physics",a:physName(A),b:physName(B)});
+  if(!diffs.length){finishMerge({});return;}
+  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="12px";
+  const n=document.createElement("p");n.className="note";n.textContent="A level can only have one of each of these (that's how Marathon maps work, in Aleph One too). The two maps differ here: pick which one the merged map keeps.";body.appendChild(n);
+  const choice={};
+  for(const df of diffs){const g=group(df.label);choice[df.key]="a";
+    const opts2=[["a",`This map: ${df.a}`],["b",`Added map: ${df.b}`]];if(df.both)opts2.push(["both",`Both: ${df.both}`]);
+    for(const [v,l] of opts2){const lab=document.createElement("label");lab.style.display="block";const i=document.createElement("input");i.type="radio";i.name="mg_"+df.key;i.value=v;i.id=`mg_${df.key}_${v}`;i.checked=v==="a";i.onchange=()=>{if(i.checked)choice[df.key]=v;};lab.appendChild(i);lab.append(" "+l);g.appendChild(lab);}
+    if(df.note){const p=document.createElement("p");p.className="note";p.textContent=df.note;g.appendChild(p);}
+    body.appendChild(g);}
+  openModal("Merge settings",body,[button("Back",closeModal),button("Place it",()=>{closeModal();finishMerge(choice);},"primary")]);
+}
+function finishMerge(choice){
+  if(!placing)return;
+  pushUndo();
+  const r=mergeInto(doc,placing.B,placing,choice);
+  const name=placing.name;placing=null;hidePlaceBox();
+  resetPolyRefs();changed();
+  const msg=[`Added “${name}”: ${r.polys} polygons, ${r.objs} objects.`];
+  if(r.polyTotal>1024)msg.push(`The level now has ${r.polyTotal} polygons, more than the original games allowed (1024). Test it in Aleph One.`);
+  if(r.rotatedFloors)msg.push("Floor and ceiling textures can't turn in Marathon, so the added map's floor patterns now run the other way.");
+  status(msg[0]);toast(msg.join(" "));
+}
+// Merge B (already a private copy) into A, placed by P {cx,cy,tx,ty,dz,rot}. choice: which map's level settings win.
+function mergeInto(A,B,P,choice={}){
+  const ch=k=>choice[k]||"a";
+  // level settings
+  const envTo=ch("env")==="b"?B.info.env:A.info.env;
+  rehomeTextures(A,A.info.env,envTo);rehomeTextures(B,B.info.env,envTo);
+  if(ch("game")==="b")A.info.game=B.info.game;
+  A.info.env=envTo;
+  if(ch("landscape")==="b")A.info.landscape=B.info.landscape;
+  if(ch("envFlags")==="b")A.info.envFlags=(A.info.envFlags&~0x0f)|(B.info.envFlags&0x0f);
+  if(ch("compat")==="b")A.info.envFlags=(A.info.envFlags&0x0f)|(B.info.envFlags&~0x0f);
+  if(ch("entry")==="b")A.info.entry=B.info.entry;else if(ch("entry")==="both")A.info.entry|=B.info.entry;
+  if(ch("mission")==="b")A.info.mission=B.info.mission;
+  if(ch("physics")==="b")A.physics=B.physics;
+  // offsets for everything B numbers itself
+  const polyOff=A.polys.length,termOff=(A.terms||[]).length;
+  const aLights=A.lights?A.lights.length:0,bLights=B.lights?B.lights.length:0;
+  const AMB=16,RND=32; // record sizes of the ambi and bonk chunks
+  const ambOff=A.ambi?b64dec(A.ambi).length/AMB|0:0,rndOff=A.bonk?b64dec(A.bonk).length/RND|0:0;
+  // tags: B's go after A's highest so a switch in one map never works things in the other
+  const tagsOf=d=>{const t=[0];for(const q of d.polys)if(q.plat&&q.plat.tag)t.push(q.plat.tag);for(const s of d.sides.values())if(s.panel&&panelKeyOf(s.panel.type)==="tag")t.push(s.panel.perm|0);
+    for(const raw of d.lights||[]){const u=b64dec(raw);t.push((u[90]<<24>>16)|u[91]);}return t;};
+  const aTagMax=Math.max(...tagsOf(A)),bUsesTags=Math.max(...tagsOf(B))>0;const tagOff=bUsesTags?aTagMax:0;
+  // light indexes: keep own-table indexes (moved past A's table for B); drop ones that pointed at Forge's standard table
+  const fixLi=(v,own,off)=>v==null?v:(v>=0&&v<own?v+off:undefined);
+  const setLi=(o,k,own,off)=>{if(o[k]==null)return;const v=fixLi(o[k],own,off);if(v==null)delete o[k];else o[k]=v;};
+  const sidesOf=d=>{const out=[];for(const q of d.polys)q.verts.forEach((a,k)=>{const s=d.sides.get(sideKey(a,q.verts[(k+1)%q.verts.length]));if(s)out.push(s);});return out;};
+  const fixLights=(d,own,off)=>{for(const q of d.polys){for(const k of ["fli","cli","wli"])setLi(q,k,own,off);if(q.media){setLi(q.media,"li",own,off);setLi(q.media,"mli",own,off);}
+      if([6,8].includes(q.type)&&own)q.perm=fixLi(q.perm,own,off)??q.perm;}
+    for(const s of sidesOf(d)){for(const part of ["full","upper","lower","trans"])if(s[part])setLi(s[part],"li",own,off);
+      if(s.panel&&panelKeyOf(s.panel.type)==="light"&&own)s.panel.perm=fixLi(s.panel.perm,own,off)??s.panel.perm;}};
+  fixLights(A,aLights,0);fixLights(B,bLights,aLights);
+  if(bLights){const bl=B.lights.map(raw=>{if(!tagOff)return raw;const u=b64dec(raw);const t=(u[90]<<24>>16)|u[91];if(t>0){const nt=t+tagOff;u[90]=(nt>>8)&255;u[91]=nt&255;}return b64enc(u);});A.lights=[...(A.lights||[]),...bl];}
+  // geometry of B: move, turn, raise
+  const rot=((P.rot%4)+4)%4;const dz=P.dz|0;const wrapWU=v=>((Math.round(v)%WU)+WU)%WU;
+  const before=new Map(B.polys.map(q=>[q,centroid(q.verts)]));
+  for(const p of B.pts){const n=placeXY(p,P);p.x=n.x;p.y=n.y;}
+  for(const q of B.polys){const c0=before.get(q),c1=centroid(q.verts);
+    // floor/ceiling textures are laid out in world space: shift their origin so each polygon keeps its pattern
+    q.fox=wrapWU((q.fox||0)-(c1.x-c0.x));q.foy=wrapWU((q.foy||0)-(c1.y-c0.y));q.cox=wrapWU((q.cox||0)-(c1.x-c0.x));q.coy=wrapWU((q.coy||0)-(c1.y-c0.y));
+    if(dz){q.floor+=dz;q.ceil+=dz;if(q.media){q.media.low+=dz;q.media.high+=dz;}if(q.plat){if(q.plat.min!=null&&q.plat.min!==-1)q.plat.min+=dz;if(q.plat.max!=null&&q.plat.max!==-1)q.plat.max+=dz;}}
+    if(rot&&q.media)q.media.dir=(((q.media.dir||0)+rot*90)%360+360)%360;
+    if([7,9].includes(q.type)&&q.perm>=0)q.perm+=polyOff;
+    if(q.type===10&&q.perm>=0)q.perm+=polyOff;
+    if(q.plat&&q.plat.tag>0&&tagOff)q.plat.tag+=tagOff;
+    if(q.amb!=null&&q.amb>=0)q.amb+=ambOff;if(q.rnd!=null&&q.rnd>=0)q.rnd+=rndOff;}
+  for(const s of sidesOf(B))if(s.panel){const key=panelKeyOf(s.panel.type);
+    if(key==="platform"&&s.panel.perm>=0)s.panel.perm+=polyOff;else if(key==="terminal"&&s.panel.perm>=0)s.panel.perm+=termOff;else if(key==="tag"&&s.panel.perm>0&&tagOff)s.panel.perm+=tagOff;}
+  for(const o of B.objs){const n=placeXY(o,P);o.x=n.x;o.y=n.y;if(o.kind!==5)o.facing=(((o.facing||0)+rot*90)%360+360)%360;if(o.pi!=null&&o.pi>=0)o.pi+=polyOff;}
+  for(const nt of B.notes||[]){const n=placeXY(nt,P);nt.x=n.x;nt.y=n.y;}
+  for(const t of B.terms||[])t.script=String(t.script||"").replace(/^(#INTRALEVEL TELEPORT )(\d+)/gm,(_,h,v)=>h+(+v+polyOff));
+  // sound tables
+  const cat=(a,b)=>{if(!b)return a;if(!a)return b;const x=b64dec(a),y=b64dec(b);const u=new Uint8Array(x.length+y.length);u.set(x);u.set(y,x.length);return b64enc(u);};
+  if(B.ambi)A.ambi=cat(A.ambi,B.ambi);if(B.bonk)A.bonk=cat(A.bonk,B.bonk);
+  if(!A.placement&&B.placement)A.placement=B.placement;
+  // join
+  A.pts.push(...B.pts);A.lines.push(...B.lines);A.polys.push(...B.polys);A.objs.push(...B.objs);
+  for(const [k,v] of B.sides)A.sides.set(k,v);
+  A.notes=[...(A.notes||[]),...(B.notes||[])];A.terms=[...(A.terms||[]),...(B.terms||[])];
+  return {polys:B.polys.length,objs:B.objs.length,polyTotal:A.polys.length,rotatedFloors:!!rot};
+}
+// When a level's main wall set changes, surfaces that used the old one get it written down (like any other set's texture).
+function rehomeTextures(d,fromEnv,toEnv){
+  if(fromEnv===toEnv)return;const from=17+fromEnv,to=17+toEnv;
+  const home=t=>{if(!t)return;if(t.col==null)t.col=from;if(t.col===to)delete t.col;};
+  for(const q of d.polys){
+    if(q.fcol==null)q.fcol=from;if(q.fcol===to)delete q.fcol;if(q.ccol==null)q.ccol=from;if(q.ccol===to)delete q.ccol;
+    // walls: write out all three parts the way they resolve now, so none falls back to the polygon's set-less default
+    q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];const key=sideKey(a,b);const s=d.sides.get(key)||{};
+      const res=part=>{const def={b:q.wtex,ox:0,oy:0};return part==="full"?(s.full||s.upper||s.lower||def):part==="upper"?(s.upper||s.full||def):(s.lower||s.full||def);};
+      const n={...s,full:cloneSide(res("full")),upper:cloneSide(res("upper")),lower:cloneSide(res("lower"))};
+      for(const part of ["full","upper","lower","trans"])home(n[part]);
+      d.sides.set(key,n);});}
 }
 
 // =============================================================== Forge-style palettes, light table, spawn table
@@ -3389,7 +3601,7 @@ function compatReasons(d=doc){
 function setUI(style){opts.uiStyle=style;document.documentElement.setAttribute("data-ui",style);$("uiModern").setAttribute("aria-pressed",style==="modern");$("uiRetro").setAttribute("aria-pressed",style==="retro");readPalette();savePrefs();redraw();renderLegend();}
 $("uiModern").onclick=()=>setUI("modern");$("uiRetro").onclick=()=>setUI("retro");
 $("bNew").onclick=openNewLevel;$("bShapes").onclick=()=>openShapesDialog(false);$("bPaint").onclick=()=>{paletteShown=true;open3D();};
-$("bOpen").onclick=()=>$("fileIn").click();
+$("bOpen").onclick=()=>$("fileIn").click();$("bAddMap").onclick=openAddMap;
 $("bSave").onclick=saveProject;$("bExport").onclick=openExport;
 $("bUndo").onclick=undo;$("bRedo").onclick=redo;$("bGen").onclick=openGenerate;$("b3d").onclick=open3D;
 $("tLevels").onclick=()=>setTab("levels");$("tInspect").onclick=()=>setTab("inspect");$("tLevel").onclick=()=>setTab("level");$("tIssues").onclick=()=>setTab("issues");
@@ -3420,7 +3632,7 @@ requestAnimationFrame(()=>{resize();fitView();});
         clearTimeout(scenTimer);try{await idb.put("scenario",serializeScenario());}catch(e){}location.replace(location.pathname+"?v="+encodeURIComponent(v));return;}}}catch(e){}
     busy=false;};
   setInterval(check,4000);window.addEventListener("focus",check);})();
-window.__forge={scenario,switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;changed();}};
+window.__forge={scenario,openAddMap,addMapFromBuffer,startPlacing,dropPlacing,finishMerge,mergeInto,get placing(){return placing;},switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;resetPolyRefs();changed();}};
 Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
   makePolygonFromCoords,addPointAt,addSegment,fillAt,objPoly,
   screenOf(x,y){const r=canvas.getBoundingClientRect();const [sx,sy]=toS(x,y);return {x:r.left+sx,y:r.top+sy};},centroid,fitView});

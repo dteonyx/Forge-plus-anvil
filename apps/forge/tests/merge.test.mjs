@@ -1,0 +1,135 @@
+// "Add a map to this map": merging one level into another.
+import { test, before, after } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { openForge } from "./support/browser.mjs";
+
+let app;
+before(async () => { app = await openForge(); });
+after(async () => { await app?.close(); });
+
+// Summary of a level after export → re-import, so the checks see what Aleph One would load.
+const SUMMARY = `(d) => {
+  const f = window.__forge;
+  const bytes = f.buildWadFile(f.buildMapChunks(d).chunks, "Merge", 1);
+  const back = f.levelToDoc(f.parseWad(bytes.buffer.slice(0)).levels[0]).doc;
+  const again = f.buildWadFile(f.buildMapChunks(back).chunks, "Merge", 1);
+  const n = back.polys.length;
+  return {
+    polys: n, objs: back.objs.length, starts: back.objs.filter((o) => o.kind === 3).length,
+    plats: back.polys.filter((q) => q.type === 5).length,
+    terms: (back.terms || []).length, lights: (back.lights || []).length,
+    badPolyRefs: back.polys.filter((q) => [7, 9, 10].includes(q.type) && q.perm >= n).length,
+    teleTargets: back.polys.filter((q) => q.type === 10 && q.perm >= 0).map((q) => q.perm),
+    stable: bytes.length === again.length && bytes.every((v, i) => v === again[i]),
+  };
+}`;
+
+test("a generated map merges into another: moved, turned, raised, and it exports", async () => {
+  const r = await app.page.evaluate((SUMMARY) => {
+    const f = window.__forge;
+    const sum = eval(SUMMARY);
+    f.applySpec(f.randomSpec(11, "small", "solo"), false, "a");
+    const A = f.doc;
+    f.applySpec(f.randomSpec(22, "small", "carnage"), false, "b");
+    const B = f.doc;
+    f.setDoc(A);
+    const nA = A.polys.length, nB = B.polys.length, oA = A.objs.length, oB = B.objs.length;
+    const floorB = B.polys[0].floor;
+    const xs = B.pts.map((p) => p.x), ys = B.pts.map((p) => p.y);
+    const P = { cx: 0, cy: 0, tx: 20 * 1024, ty: 0, dz: 512, rot: 1 };
+    const p0 = { x: B.pts[0].x, y: B.pts[0].y };
+    const firstB = B.polys[0];
+    f.mergeInto(A, B, P, { entry: "both" });
+    return {
+      nA, nB, oA, oB, after: A.polys.length, objs: A.objs.length,
+      raised: firstB.floor - floorB,
+      turned: [B.pts[0].x, B.pts[0].y], expect: [20 * 1024 - p0.y, p0.x],
+      issues: f.validate().filter((i) => i.lv === "error").map((i) => i.title),
+      s: sum(A),
+    };
+  }, SUMMARY);
+  assert.equal(r.after, r.nA + r.nB);
+  assert.equal(r.objs, r.oA + r.oB);
+  assert.equal(r.raised, 512);
+  assert.deepEqual(r.turned, r.expect);
+  assert.deepEqual(r.issues, []);
+  assert.equal(r.s.polys, r.nA + r.nB);
+  assert.equal(r.s.badPolyRefs, 0);
+  assert.ok(r.s.stable, "merged map exports the same after a re-import");
+});
+
+test("merge asks about level settings that differ, and the choice sticks", async () => {
+  const r = await app.page.evaluate(() => {
+    const f = window.__forge;
+    f.applySpec(f.randomSpec(5, "small", "solo"), false, "a");
+    const A = f.doc; A.info.env = 0; A.info.landscape = 0;
+    f.applySpec(f.randomSpec(6, "small", "solo"), false, "b");
+    const B = f.doc; B.info.env = 2; B.info.landscape = 3; B.info.envFlags = 8;
+    f.setDoc(A);
+    f.startPlacing(B, "Test B");
+    const placingOk = !!f.placing && !document.getElementById("placeBox").hidden;
+    f.dropPlacing();
+    const modal = !document.getElementById("modal").hidden;
+    if (!modal) return { placingOk, modal, toast: document.getElementById("toast").textContent, msg: document.getElementById("sMsg").textContent };
+    const asked = [...document.querySelectorAll("#modal input[type=radio]")].map((i) => i.id);
+    if (!document.getElementById("mg_landscape_b")) return { asked, modal, toast: document.getElementById("toast").textContent, placingOk };
+    document.getElementById("mg_landscape_b").click();
+    document.getElementById("mg_envFlags_b").click();
+    [...document.querySelectorAll("#modal button")].find((b) => b.textContent === "Place it").click();
+    const d = f.doc;
+    // B's walls were on wall set 2; they must still say so after the merge (the level stays on set 0)
+    const bWallsHome = d.polys.slice(-B.polys.length).every((q) => q.fcol === 19 && q.ccol === 19);
+    return { placingOk, modal, asked, land: d.info.landscape, flags: d.info.envFlags, env: d.info.env, bWallsHome, placingAfter: !!f.placing };
+  });
+  assert.ok(r.placingOk, JSON.stringify(r));
+  assert.ok(r.modal, "settings dialog opened: " + JSON.stringify(r));
+  assert.ok(r.asked.includes("mg_env_a") && r.asked.includes("mg_landscape_b") && r.asked.includes("mg_envFlags_b"));
+  assert.equal(r.env, 0);
+  assert.equal(r.land, 3);
+  assert.equal(r.flags & 8, 8);
+  assert.ok(r.bWallsHome, "the added map keeps its own wall set");
+  assert.equal(r.placingAfter, false);
+});
+
+// Bungie's maps (lights, switches, terminals, doors, teleporters, sounds). Set MARATHON_MAPS_DIR to a folder of maps
+// (the disc's Demo Merge folder works) and MERGE_A / MERGE_B to two file names in it.
+const dir = process.env.MARATHON_MAPS_DIR, fa = process.env.MERGE_A, fb = process.env.MERGE_B;
+test("two of Bungie's maps merge into one that exports and re-imports cleanly", { skip: !(dir && fa && fb) }, async () => {
+  const a = [...fs.readFileSync(path.join(dir, fa))], b = [...fs.readFileSync(path.join(dir, fb))];
+  const r = await app.page.evaluate(({ a, b, SUMMARY }) => {
+    const f = window.__forge;
+    const sum = eval(SUMMARY);
+    const load = (arr) => f.levelToDoc(f.parseWad(new Uint8Array(arr).buffer).levels.find((l) => l.chunks.POLY)).doc;
+    const A = load(a), B = load(b);
+    const sa = sum(A), sb = sum(B);
+    const rawLights = (A.lights || []).length + (B.lights || []).length;
+    const ambA = A.ambi ? atob(A.ambi).length : 0, ambB = B.ambi ? atob(B.ambi).length : 0;
+    const rndA = A.bonk ? atob(A.bonk).length : 0, rndB = B.bonk ? atob(B.bonk).length : 0;
+    const maxAmbB = Math.max(-1, ...B.polys.map((q) => q.amb ?? -1)), maxRndB = Math.max(-1, ...B.polys.map((q) => q.rnd ?? -1));
+    f.setDoc(A);
+    // Bungie's levels fill most of the map area, so this one goes on top (Forge's 5D space), raised out of the way
+    f.mergeInto(A, B, { cx: 0, cy: 0, tx: 0, ty: 0, dz: 8 * 1024, rot: 0 }, {});
+    const tooFar = A.pts.some((p) => Math.abs(p.x) > 32767 || Math.abs(p.y) > 32767);
+    const maxAmb = Math.max(-1, ...A.polys.map((q) => q.amb ?? -1)), maxRnd = Math.max(-1, ...A.polys.map((q) => q.rnd ?? -1));
+    return { sa, sb, s: sum(A), rawLights, merged: (A.lights || []).length, ambA, ambB, rndA, rndB, maxAmbB, maxRndB, maxAmb, maxRnd, tooFar,
+      ambTotal: A.ambi ? atob(A.ambi).length : 0, rndTotal: A.bonk ? atob(A.bonk).length : 0 };
+  }, { a, b, SUMMARY });
+  console.log(JSON.stringify(r));
+  assert.equal(r.ambA % 16, 0, "ambient sound records are 16 bytes");
+  assert.equal(r.rndA % 32, 0, "random sound records are 32 bytes");
+  assert.ok(r.maxAmbB < r.ambB / 16 && r.maxRndB < r.rndB / 32);
+  assert.ok(r.maxAmb < r.ambTotal / 16 && r.maxRnd < r.rndTotal / 32, "sound indexes stay inside the merged tables");
+  if (!r.tooFar) {
+    assert.equal(r.s.polys, r.sa.polys + r.sb.polys);
+    assert.equal(r.s.objs, r.sa.objs + r.sb.objs);
+    assert.equal(r.s.plats, r.sa.plats + r.sb.plats);
+    assert.equal(r.s.terms, r.sa.terms + r.sb.terms);
+    assert.equal(r.merged, r.rawLights, "both light tables are kept");
+    assert.equal(r.s.teleTargets.length, r.sa.teleTargets.length + r.sb.teleTargets.length);
+    assert.ok(r.s.teleTargets.every((t) => t >= 0));
+    assert.equal(r.s.badPolyRefs, 0);
+    assert.ok(r.s.stable);
+  }
+});
