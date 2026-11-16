@@ -21,7 +21,7 @@ Remakes of Bungie's Marathon editing tools for [Aleph One](https://alephone.lhow
 
 Exports are `.sceA` map files for Aleph One. Put one in your scenario folder and pick it as the map in Preferences → Environment.
 
-**Export to Unreal…** saves the current level as a `.glb` 3D model (floors, ceilings, walls, textures) that Unreal Engine 5 imports. See `docs/UNREAL_EXPORT.md`.
+**Levels for the Unreal remake:** set **Made for** (Level tab) to *Unreal remake* and the level has no size limit. It still saves as a `.sceA`; anything past Aleph One's edge (about 32 WU from the centre) goes in an extra `FP32` chunk that Aleph One skips and the remake reads. Such a level won't play in Aleph One, and Checks says so. The chunk is described in `docs/BIG_MAPS.md`.
 
 ## No game data here
 

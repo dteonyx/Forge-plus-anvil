@@ -55,6 +55,8 @@ const MON_FLAGS = [[1,"Teleports in"],[2,"From ceiling"],[4,"Blind"],[8,"Deaf"],
 const GRIDS = [[64,"1/16 WU"],[128,"1/8 WU"],[256,"1/4 WU"],[512,"1/2 WU"],[1024,"1 WU"]];
 const MAXC = 32000; // the game's map area (16-bit positions), drawn as the dashed border
 const EDIT_MAX = 96*1024; // how far the editor itself lets you build, so going past the game's limit can be tested
+const BIG_MAXC = 2000000; // levels made for the Unreal remake: about ±1950 WU
+const mapMax=()=>doc.info.target==="unreal"?BIG_MAXC:EDIT_MAX;
 
 // =============================================================== document model
 // Points, lines and polygons reference each other by object, so edits never need reindexing.
@@ -172,7 +174,7 @@ function splitLine(l,x,y){
   return r;
 }
 function addPointAt(x,y,tol=1){
-  x=Math.round(clamp(x,-EDIT_MAX,EDIT_MAX));y=Math.round(clamp(y,-EDIT_MAX,EDIT_MAX));
+  const M=mapMax();x=Math.round(clamp(x,-M,M));y=Math.round(clamp(y,-M,M));
   let best=null,bd=tol;for(const p of doc.pts){const d=hyp(p.x,p.y,x,y);if(d<=bd){bd=d;best=p;}}
   if(best)return best;
   for(const l of doc.lines){if(distSeg({x,y},l.a,l.b)<=tol){const t=segT({x,y},l.a,l.b);if(t>0&&t<1)return splitLine(l,x,y);}}
@@ -326,7 +328,9 @@ function validate(){
   for(const [k,sd] of doc.sides){if(!sd.panel)continue;const key=panelKeyOf(sd.panel.type);
     if(key==="terminal"&&sd.panel.perm>=(doc.terms||[]).length)out.push({lv:"warn",title:`A terminal panel uses terminal ${sd.panel.perm}, which doesn't exist`,detail:`This level has ${(doc.terms||[]).length} terminal${(doc.terms||[]).length===1?"":"s"}. Add one in the Level tab.`});
     if(key==="platform"&&sd.panel.perm>=0){const q=doc.polys[sd.panel.perm];if(!q||q.type!==5)out.push({lv:"warn",title:`A platform switch points at polygon ${sd.panel.perm}, which isn't a door or lift`,detail:"Right-click the switch in the visual view and set the right polygon number."});}}
-  limitIssues(out);
+  {const past=pastMapEdge();
+    if(doc.info.target==="unreal"){if(past.length)out.push({lv:"warn",title:"Won't play in Aleph One or Alpha One",detail:`Made for the Unreal remake: ${past.map(p=>p.what).join(", ")} go past Aleph One's edge (about 32 WU from the centre). The full size is saved in an extra part of the map file that only the Unreal remake reads.`,target:{kind:past[0].kind,items:past[0].items}});}
+    else limitIssues(out);}
   extractionIssues(out);
   if(!doc.polys.length)out.push({lv:"warn",title:"The level is empty",detail:"Draw a room with the Room tool, or use Generate."});
   return out;
@@ -695,7 +699,9 @@ function buildMapChunks(d=doc){
     if(A&&(!B||A.floor<B.floor||A.ceil>B.ceil||A.type===5||B.type===5||sa.trans||sa.panel))e.cws=newSide(e.cw,e,B,sa);
     if(B&&(!A||B.floor<A.floor||B.ceil>A.ceil||A.type===5||B.type===5||sb.trans||sb.panel))e.ccws=newSide(e.ccw,e,A,sb);});
   const chunks=[];
-  let w=new BW();for(const p of pts){w.i16(lim16(p.x));w.i16(lim16(p.y));}chunks.push(["PNTS",w.out()]);
+  // Past Aleph One's edge (16-bit map units, about ±32 WU): the normal chunks get clamped values and the real ones go in FP32
+  const big=bigCoordsNew();const fit=v=>{v=Math.round(v);if(v<-32768||v>32767)big.over=true;return lim16(v);};
+  let w=new BW();for(const p of pts){w.i16(fit(p.x));w.i16(fit(p.y));big.pts.push(p.x,p.y);}chunks.push(["PNTS",w.out()]);
   w=new BW();
   for(const e of L){const A=polys[e.cw],B=polys[e.ccw];
     let flags;
@@ -704,8 +710,9 @@ function buildMapChunks(d=doc){
     else if(A.type!==5&&B.type!==5&&Math.min(A.ceil,B.ceil)<=Math.max(A.floor,B.floor))flags=0x4000;
     else flags=0x2000;
     const hf=A&&B?Math.max(A.floor,B.floor):(A||B).floor, lc=A&&B?Math.min(A.ceil,B.ceil):(A||B).ceil;
-    w.i16(pIdx.get(e.l.a));w.i16(pIdx.get(e.l.b));w.i16(flags);w.i16(Math.min(32767,Math.round(hyp(e.l.a.x,e.l.a.y,e.l.b.x,e.l.b.y))));
-    w.i16(lim16(hf));w.i16(lim16(lc));w.i16(e.cws);w.i16(e.ccws);w.i16(e.cw);w.i16(e.ccw);w.zeros(12);}
+    const len=Math.round(hyp(e.l.a.x,e.l.a.y,e.l.b.x,e.l.b.y));big.lines.push(len,hf,lc);
+    w.i16(pIdx.get(e.l.a));w.i16(pIdx.get(e.l.b));w.i16(flags);w.i16(Math.min(32767,len));
+    w.i16(fit(hf));w.i16(fit(lc));w.i16(e.cws);w.i16(e.ccws);w.i16(e.cw);w.i16(e.ccw);w.zeros(12);}
   chunks.push(["LINS",w.out()]);
   w=new BW();
   for(const s of sides){w.i16(s.t);w.i16(s.flags);w.i16(s.x);w.i16(s.y);w.i16(s.tex);w.i16(s.x2);w.i16(s.y2);w.i16(s.tex2);w.i16(s.x3);w.i16(s.y3);w.i16(s.tex3);
@@ -723,10 +730,10 @@ function buildMapChunks(d=doc){
     w.i16(q.type);w.i16(0);w.i16(perm);w.i16(n);
     for(let k=0;k<8;k++)w.i16(k<n?pIdx.get(q.verts[k]):-1);
     for(let k=0;k<8;k++)w.i16(k<n?lIdx.get(edges[k].l):-1);
-    w.i16(shape(q.ftex,q.fcol,q.fclut));w.i16(shape(q.ctex,q.ccol,q.cclut));w.i16(lim16(q.floor));w.i16(lim16(q.ceil));w.i16(lidx(q.flight??q.light,q.fli));w.i16(lidx(q.clight??q.light,q.cli));
+    w.i16(shape(q.ftex,q.fcol,q.fclut));w.i16(shape(q.ctex,q.ccol,q.cclut));w.i16(fit(q.floor));w.i16(fit(q.ceil));w.i16(lidx(q.flight??q.light,q.fli));w.i16(lidx(q.clight??q.light,q.cli));
     w.i32(0);w.i16(-1);w.i16(-1);w.i16(-1);w.i16(-1);w.i16(q.fxfer|0);w.i16(q.cxfer|0);
     for(let k=0;k<8;k++){if(k>=n){w.i16(-1);continue;}const e=edges[k];w.i16(e.cw===i?e.ccw:e.cw);}
-    w.i16(-1);w.i16(-1);const c=centroid(q.verts);w.i16(c.x);w.i16(c.y);
+    w.i16(-1);w.i16(-1);const c=centroid(q.verts);w.i16(fit(c.x));w.i16(fit(c.y));big.polys.push(q.floor,q.ceil,Math.round(c.x),Math.round(c.y));
     for(let k=0;k<8;k++){if(k>=n){w.i16(-1);continue;}const e=edges[k];w.i16(e.cw===i?e.cws:e.ccws);}
     w.i16(q.fox|0);w.i16(q.foy|0);w.i16(q.cox|0);w.i16(q.coy|0);
     w.i16(mi);w.i16(mi>=0?(q.media.mli!=null&&q.media.mli<lightBase?q.media.mli:lidx(q.flight??q.light,q.fli)):0);
@@ -738,12 +745,12 @@ function buildMapChunks(d=doc){
   if(d.lights)for(const raw of d.lights)w.bytes(b64dec(raw));
   if(needStd)for(let i=0;i<=20;i++){const I=(20-i)/20;w.i16(0);w.i16(3);w.i16(0);for(let f=0;f<6;f++){w.i16(0);w.i16(30);w.i16(0);w.fixed(I);w.fixed(0);}w.i16(0);w.zeros(8);}
   chunks.push(["LITE",w.out()]);
-  w=new BW();for(const nt of d.notes||[]){const q=polyAtPointIn(d,nt);w.i16(nt.type|0);w.i16(nt.x);w.i16(nt.y);w.i16(q?polys.indexOf(q):-1);w.str(nt.text||"",64);}
+  w=new BW();for(const nt of d.notes||[]){const q=polyAtPointIn(d,nt);w.i16(nt.type|0);w.i16(fit(nt.x));w.i16(fit(nt.y));big.notes.push(nt.x,nt.y);w.i16(q?polys.indexOf(q):-1);w.str(nt.text||"",64);}
   chunks.push(["NOTE",w.out()]);
   w=new BW();let dropped=0;
   for(const o of d.objs){const q=objPoly(o,d);if(!q){dropped++;continue;}
     const facing=o.kind===5?(o.sub2|0):Math.round((((o.facing%360)+360)%360)*512/360)%512;
-    w.i16(o.kind);w.i16(o.sub|0);w.i16(facing);w.i16(polys.indexOf(q));w.i16(lim16(o.x));w.i16(lim16(o.y));w.i16(o.z|0);w.i16(o.flags|0);}
+    w.i16(o.kind);w.i16(o.sub|0);w.i16(facing);w.i16(polys.indexOf(q));w.i16(fit(o.x));w.i16(fit(o.y));w.i16(fit(o.z|0));big.objs.push(o.x,o.y,o.z|0);w.i16(o.flags|0);}
   chunks.push(["OBJS",w.out()]);
   w=new BW();w.i16(d.info.env);w.i16(0);w.i16(d.info.landscape);w.i16(d.info.mission);w.i16(d.info.envFlags);w.zeros(8);w.str(d.info.name||"Untitled Level",66);w.i32(d.info.entry||1);
   chunks.push(["Minf",w.out()]);
@@ -755,9 +762,9 @@ function buildMapChunks(d=doc){
   for(const [kind,key] of [[2,"items"],[0,"monsters"]])for(let i=0;i<64;i++){const r=(pl[key]&&pl[key][i])||[0,0,0,0,0,0];
     w.i16(r[0]);w.i16(Math.max(cnt[kind][i],(r[0]&1)?r[1]:0));w.i16(r[2]);w.i16(r[3]);w.i16(r[4]);w.i16(r[5]);}
   chunks.push(["plac",w.out()]);
-  w=new BW();for(const pf of plats){w.i16(pf.type);w.i16(pf.speed);w.i16(pf.delay);w.i16(pf.max===-1?-1:lim16(pf.max));w.i16(pf.min===-1?-1:lim16(pf.min));w.i32(pf.flags>>>0);w.i16(pf.poly);w.i16(pf.tag|0);w.zeros(14);}
+  w=new BW();for(const pf of plats){w.i16(pf.type);w.i16(pf.speed);w.i16(pf.delay);w.i16(fit(pf.max));w.i16(fit(pf.min));big.plats.push(pf.max,pf.min);w.i32(pf.flags>>>0);w.i16(pf.poly);w.i16(pf.tag|0);w.zeros(14);}
   chunks.push(["plat",w.out()]);
-  w=new BW();for(const m of media){w.i16(m.type|0);w.i16(m.flags|0);w.i16(m.li!=null&&m.li<lightBase?m.li:lightBase);w.i16(Math.round(((m.dir||0)%360+360)%360*512/360)%512);w.i16(m.speed|0);w.i16(lim16(m.low));w.i16(lim16(m.high));w.zeros(6);w.fixed(m.minLight||0);w.i16(0);w.i16(0);w.zeros(4);}
+  w=new BW();for(const m of media){w.i16(m.type|0);w.i16(m.flags|0);w.i16(m.li!=null&&m.li<lightBase?m.li:lightBase);w.i16(Math.round(((m.dir||0)%360+360)%360*512/360)%512);w.i16(m.speed|0);w.i16(fit(m.low));w.i16(fit(m.high));big.media.push(m.low,m.high);w.zeros(6);w.fixed(m.minLight||0);w.i16(0);w.i16(0);w.zeros(4);}
   chunks.push(["medi",w.out()]);
   chunks.push(["ambi",d.ambi?b64dec(d.ambi):new Uint8Array(0)]);
   chunks.push(["bonk",d.bonk?b64dec(d.bonk):new Uint8Array(0)]);
@@ -765,7 +772,8 @@ function buildMapChunks(d=doc){
   if(d.terms&&d.terms.length){const parts=[];d.terms.forEach((t,i)=>{const r=compileTerminal(t.script);if(r.errs.length)termErrs.push(`Terminal ${i}: ${r.errs[0]}`);if(r.bytes)parts.push(r.bytes);});
     const tot=parts.reduce((n,b)=>n+b.length,0);const u=new Uint8Array(tot);let o=0;for(const b of parts){u.set(b,o);o+=b.length;}chunks.push(["term",u]);}
   const phys=physicsChunksFor(d);for(const t of PHYSICS_TAGS)if(phys[t])chunks.push([t,phys[t]]);
-  return {chunks,stats:{points:pts.length,lines:L.length,sides:sides.length,polys:polys.length,objects:d.objs.length-dropped,dropped,platforms:plats.length,liquids:media.length,terminals:(d.terms||[]).length,physics:!!phys.MNpx,termErrs}};
+  if(big.over&&d.info.target==="unreal")chunks.push([BIG_TAG,bigCoordsChunk(big)]);
+  return {chunks,stats:{bigCoords:big.over,points:pts.length,lines:L.length,sides:sides.length,polys:polys.length,objects:d.objs.length-dropped,dropped,platforms:plats.length,liquids:media.length,terminals:(d.terms||[]).length,physics:!!phys.MNpx,termErrs}};
 }
 // Platform travel limits, computed the way Aleph One does (calculate_platform_extrema)
 function platformInfo(d=doc){
@@ -793,6 +801,30 @@ function physicsChunksFor(d){
   if(ph.mode==="lib"&&typeof scenario!=="undefined"){const lib=(scenario.physicsLib||[]).find(x=>x.name===ph.lib);if(lib)for(const t of PHYSICS_TAGS)if(lib.chunks[t])out[t]=b64dec(lib.chunks[t]);}
   return out;
 }
+// =============================================================== big maps (Unreal remake): the FP32 chunk
+// Marathon map files store positions and heights as 16-bit numbers (1 WU = 1024), so a level ends at about ±32 WU.
+// Levels made for the Unreal remake may go further. Their files still hold every normal chunk (with clamped values)
+// plus one extra chunk, FP32, with the real 32-bit values. Aleph One and Weland skip chunks they don't know.
+// FP32, big-endian, version 1: i16 version, i16 0, then seven lists, each an i32 count followed by i32 values:
+//   points (x, y: PNTS order) · polygons (floor, ceiling, centre x, centre y: POLY order)
+//   lines (length, highest floor, lowest ceiling: LINS order) · objects (x, y, z: OBJS order)
+//   notes (x, y: NOTE order) · platforms (max, min: plat order) · liquids (low, high: medi order)
+const BIG_TAG="FP32",BIG_LISTS=[["pts",2],["polys",4],["lines",3],["objs",3],["notes",2],["plats",2],["media",2]];
+const MAP_EDGE=32767;
+function bigCoordsNew(){const b={over:false};for(const [k] of BIG_LISTS)b[k]=[];return b;}
+function bigCoordsChunk(b){const w=new BW();w.i16(1);w.i16(0);
+  for(const [k,n] of BIG_LISTS){const a=b[k];w.i32(a.length/n);for(const v of a)w.i32(Math.round(v));}return w.out();}
+function bigCoordsRead(dv){if(!dv||dv.byteLength<4||dv.getInt16(0)!==1)return null;const b={};let o=4;
+  for(const [k,n] of BIG_LISTS){if(o+4>dv.byteLength)return null;const cnt=dv.getInt32(o);o+=4;if(cnt<0||o+cnt*n*4>dv.byteLength)return null;
+    const a=[];for(let i=0;i<cnt;i++){const r=[];for(let j=0;j<n;j++){r.push(dv.getInt32(o));o+=4;}a.push(r);}b[k]=a;}
+  return b;}
+// What in this level goes past Aleph One's edge: [{what, items}] (empty when everything fits)
+function pastMapEdge(d=doc){const out=(v)=>Math.abs(Math.round(v))>MAP_EDGE&&Math.round(v)!==-32768;
+  const pts=d.polys.flatMap(q=>q.verts).filter((v,i,a)=>a.indexOf(v)===i&&(out(v.x)||out(v.y)));
+  const high=d.polys.filter(q=>out(q.floor)||out(q.ceil)||(q.media&&(out(q.media.low)||out(q.media.high)))||(q.type===5&&q.plat&&(out(q.plat.max)||out(q.plat.min))));
+  const objs=d.objs.filter(o=>out(o.x)||out(o.y)||out(o.z|0)),notes=(d.notes||[]).filter(n=>out(n.x)||out(n.y));
+  const r=[];if(pts.length)r.push({what:"points",items:pts,kind:"point"});if(high.length)r.push({what:"heights",items:high,kind:"poly"});
+  if(objs.length)r.push({what:"objects",items:objs,kind:"obj"});if(notes.length)r.push({what:"notes",items:notes,kind:"note"});return r;}
 function buildWadFile(chunks,name,dataVersion=1){
   const entry=new BW();let off=0;
   chunks.forEach(([t,data],i)=>{entry.i32(tag(t));const last=i===chunks.length-1;entry.i32(last?0:off+16+data.length);entry.i32(data.length);entry.i32(0);entry.bytes(data);off+=16+data.length;});
@@ -851,6 +883,8 @@ function levelToDoc(lv){
   const pts=[];
   if(c.PNTS&&c.PNTS.byteLength){for(let o=0;o+4<=c.PNTS.byteLength;o+=4)pts.push(P(c.PNTS.getInt16(o),c.PNTS.getInt16(o+2)));}
   else if(c.EPNT){for(let o=0;o+16<=c.EPNT.byteLength;o+=16)pts.push(P(c.EPNT.getInt16(o+6),c.EPNT.getInt16(o+8)));}
+  const big=bigCoordsRead(c[BIG_TAG]); // levels made for the Unreal remake: real values past the 16-bit edge
+  if(big)pts.forEach((p,i)=>{const r=big.pts[i];if(r){p.x=r[0];p.y=r[1];}});
   d.pts=pts;
   const lines=[];if(c.LINS)for(let o=0;o+32<=c.LINS.byteLength;o+=32){const a=c.LINS.getInt16(o),b=c.LINS.getInt16(o+2),f=c.LINS.getUint16(o+4);
     lines.push({a:pts[a],b:pts[b],flags:f,cws:c.LINS.getInt16(o+12),ccws:c.LINS.getInt16(o+14),cw:c.LINS.getInt16(o+16),ccw:c.LINS.getInt16(o+18)});}
@@ -869,7 +903,9 @@ function levelToDoc(lv){
     const mnF=v.getInt16(o+10),mxF=v.getInt16(o+12),mnC=v.getInt16(o+14),mxC=v.getInt16(o+16);
     const [min,max]=both?[mnF,mxC]:(F&(1<<6))?[mnF,mxF]:(F&(1<<7))?[mnC,mxC]:[-1,-1];
     platBy.set(v.getInt16(o+18),{type:v.getInt16(o),speed:v.getInt16(o+6),delay:v.getInt16(o+8),min,max,flags:F,tag:v.getInt16(o+94)});}
+  if(big)[...platBy.values()].forEach((pf,j)=>{const r=big.plats[j];if(r&&c.plat&&c.plat.byteLength){pf.max=r[0];pf.min=r[1];}});
   const MD=[];if(c.medi)for(let o=0;o+32<=c.medi.byteLength;o+=32){const v=c.medi;MD.push({type:v.getInt16(o),flags:v.getUint16(o+2),li:v.getInt16(o+4),dir:Math.round(v.getInt16(o+6)*360/512),speed:v.getInt16(o+8),low:v.getInt16(o+10),high:v.getInt16(o+12),minLight:v.getInt32(o+20)/65536});}
+  if(big)MD.forEach((m,j)=>{const r=big.media[j];if(r){m.low=r[0];m.high=r[1];}});
   if(c.ambi&&c.ambi.byteLength)d.ambi=b64enc(bytesOf(c.ambi));
   if(c.bonk&&c.bonk.byteLength)d.bonk=b64enc(bytesOf(c.bonk));
   const fileToDoc={};
@@ -892,7 +928,7 @@ function levelToDoc(lv){
       const re=new Map();for(let k=0;k<ring.length;k++){const a=ring[k],b=ring[(k+1)%ring.length];const r=d.sides.get(sideKey(a,b));if(r){d.sides.delete(sideKey(a,b));re.set(sideKey(b,a),r);}}for(const [k2,v2] of re)d.sides.set(k2,v2);ring.reverse();}
     fileToDoc[i]=d.polys.length;
     const q={...polyDefaults(),verts:ring,type,perm:v.getInt16(o+4),
-      floor:v.getInt16(o+44),ceil:v.getInt16(o+46),light:pct(fli),fli,cli,
+      floor:big&&big.polys[i]?big.polys[i][0]:v.getInt16(o+44),ceil:big&&big.polys[i]?big.polys[i][1]:v.getInt16(o+46),light:pct(fli),fli,cli,
       ftex:ft===0xffff?6:ft&255,ctex:ct===0xffff?7:ct&255,wtex:wall??5,fxfer:v.getInt16(o+64),cxfer:v.getInt16(o+66),fox:v.getInt16(o+108),foy:v.getInt16(o+110),cox:v.getInt16(o+112),coy:v.getInt16(o+114)};
     if(pct(cli)!==pct(fli))q.clight=pct(cli);
     {const fi=texInfo(ft),ci=texInfo(ct);if(fi&&fi.col!=null)q.fcol=fi.col;if(fi&&fi.clut)q.fclut=fi.clut;if(ci&&ci.col!=null)q.ccol=ci.col;if(ci&&ci.clut)q.cclut=ci.clut;}
@@ -906,12 +942,15 @@ function levelToDoc(lv){
     for(const sd of d.sides.values())if(sd.panel&&panelKeyOf(sd.panel.type)==="platform")sd.panel.perm=fix(sd.panel.perm);}
   if(c.OBJS)for(let o=0;o+16<=c.OBJS.byteLength;o+=16){const v=c.OBJS;const kind=v.getInt16(o);
     const f=v.getInt16(o+4);
-    d.objs.push({kind,sub:v.getInt16(o+2),facing:kind===5?0:Math.round(f*360/512),sub2:kind===5?f:0,x:v.getInt16(o+8),y:v.getInt16(o+10),z:v.getInt16(o+12),flags:v.getUint16(o+14),pi:v.getInt16(o+6)});}
-  if(c.NOTE)for(let o=0;o+72<=c.NOTE.byteLength;o+=72){const v=c.NOTE;const b=new Uint8Array(v.buffer,v.byteOffset+o+8,64);const z=b.indexOf(0);d.notes.push({type:v.getInt16(o),x:v.getInt16(o+2),y:v.getInt16(o+4),text:macDecode(b.subarray(0,z<0?64:z))});}
+    d.objs.push({kind,sub:v.getInt16(o+2),facing:kind===5?0:Math.round(f*360/512),sub2:kind===5?f:0,x:v.getInt16(o+8),y:v.getInt16(o+10),z:v.getInt16(o+12),flags:v.getUint16(o+14),pi:v.getInt16(o+6)});
+    const r=big&&big.objs[o/16];if(r){const ob=d.objs[d.objs.length-1];ob.x=r[0];ob.y=r[1];ob.z=r[2];}}
+  if(c.NOTE)for(let o=0;o+72<=c.NOTE.byteLength;o+=72){const v=c.NOTE;const b=new Uint8Array(v.buffer,v.byteOffset+o+8,64);const z=b.indexOf(0);d.notes.push({type:v.getInt16(o),x:v.getInt16(o+2),y:v.getInt16(o+4),text:macDecode(b.subarray(0,z<0?64:z))});
+    const r=big&&big.notes[o/72];if(r){const nt=d.notes[d.notes.length-1];nt.x=r[0];nt.y=r[1];}}
   if(c.Minf&&c.Minf.byteLength>=88){const m=c.Minf;Object.assign(d.info,{name:lv.name,env,landscape:clamp(m.getInt16(4),0,3),mission:m.getInt16(6),envFlags,entry:m.getInt32(84)||1});}
   if(c.plac&&c.plac.byteLength>=128*12){const rd=(i)=>[0,2,4,6,8,10].map(k=>c.plac.getUint16(i*12+k)<<16>>16);
     d.placement={items:Array.from({length:64},(_,i)=>rd(i)),monsters:Array.from({length:64},(_,i)=>rd(64+i))};
     for(const r of [...d.placement.items,...d.placement.monsters])r[5]=r[5]&0xffff;}
+  if(big)d.info.target="unreal";
   if(c.term&&c.term.byteLength){try{d.terms=parseTerminalChunk(bytesOf(c.term));}catch(e){notes.push("its terminals couldn't be read");}}
   if(PHYSICS_TAGS.some(t=>c[t])){d.physics={mode:"keep",keep:{}};for(const t of PHYSICS_TAGS)if(c[t])d.physics.keep[t]=b64enc(bytesOf(c[t]));}
   return {doc:d,notes};
@@ -1124,8 +1163,9 @@ function draw(){
     for(let y=Math.floor(tl.y/step)*step;y<=br.y;y+=step){const s=Math.round(toS(0,y)[1])+.5;ctx.moveTo(0,s);ctx.lineTo(W,s);}ctx.stroke();};
   drawGrid(minor,pal.grid,1);drawGrid(WU,pal["grid-major"],1);
   if(WU*view.scale<6)drawGrid(WU*8,pal["grid-major"],1);
+  if(WU*8*view.scale<6)drawGrid(WU*64,pal["grid-major"],1);
   // map bounds
-  {const [x0,y0]=toS(-MAXC,-MAXC),[x1,y1]=toS(MAXC,MAXC);ctx.strokeStyle=pal.edge;ctx.setLineDash([6,4]);ctx.strokeRect(x0,y0,x1-x0,y1-y0);ctx.setLineDash([]);}
+  if(doc.info.target!=="unreal"){const [x0,y0]=toS(-MAXC,-MAXC),[x1,y1]=toS(MAXC,MAXC);ctx.strokeStyle=pal.edge;ctx.setLineDash([6,4]);ctx.strokeRect(x0,y0,x1-x0,y1-y0);ctx.setLineDash([]);}
   // polygons
   const key=opts.viewMode==="ceil"?"ceil":"floor";const range=heightRange(key);
   const selPolys=sel.kind==="poly"?new Set(sel.items):new Set();
@@ -1285,7 +1325,7 @@ canvas.addEventListener("pointerdown",e=>{
 canvas.addEventListener("pointermove",e=>{
   if(pointers.has(e.pointerId))pointers.set(e.pointerId,{x:e.offsetX,y:e.offsetY});
   if(pinch&&pointers.size===2){const [a,b]=[...pointers.values()];const d=hyp(a.x,a.y,b.x,b.y),mid={x:(a.x+b.x)/2,y:(a.y+b.y)/2};
-    view.scale=clamp(pinch.scale*d/pinch.d,2/WU,400/WU);
+    view.scale=clamp(pinch.scale*d/pinch.d,0.1/WU,400/WU);
     view.cx=pinch.c.x-(mid.x-pinch.mid.x)/view.scale;view.cy=pinch.c.y-(mid.y-pinch.mid.y)/view.scale;updateStatus();redraw();return;}
   const sx=e.offsetX,sy=e.offsetY,w=toW(sx,sy);cursorW=w;
   if(drag){
@@ -1337,12 +1377,12 @@ canvas.addEventListener("wheel",e=>{e.preventDefault();
     const ids=TOOLS.map(t=>t[0]);const i=ids.indexOf(tool);const n=ids[((i+Math.sign(step))%ids.length+ids.length)%ids.length];setTool(n);
     const t=TOOLS.find(x=>x[0]===n);status(`${t[1]} (${t[2]}). Ctrl+wheel: next tool · wheel zooms`);return;}
   const before=toW(e.offsetX,e.offsetY);const f=Math.exp(-e.deltaY*(e.ctrlKey?0.01:0.0015));
-  view.scale=clamp(view.scale*f,2/WU,400/WU);const after=toW(e.offsetX,e.offsetY);view.cx+=before.x-after.x;view.cy+=before.y-after.y;updateStatus();redraw();},{passive:false});
-function zoomBy(f){view.scale=clamp(view.scale*f,2/WU,400/WU);updateStatus();redraw();}
+  view.scale=clamp(view.scale*f,0.1/WU,400/WU);const after=toW(e.offsetX,e.offsetY);view.cx+=before.x-after.x;view.cy+=before.y-after.y;updateStatus();redraw();},{passive:false});
+function zoomBy(f){view.scale=clamp(view.scale*f,0.1/WU,400/WU);updateStatus();redraw();}
 function fitView(){
   const vs=doc.pts.length?doc.pts:[{x:-4*WU,y:-4*WU},{x:4*WU,y:4*WU}];
   const xs=vs.map(v=>v.x),ys=vs.map(v=>v.y);const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
-  view.cx=(x0+x1)/2;view.cy=(y0+y1)/2;view.scale=clamp(Math.min((W-80)/Math.max(x1-x0,WU),(H-80)/Math.max(y1-y0,WU)),2/WU,120/WU);updateStatus();redraw();}
+  view.cx=(x0+x1)/2;view.cy=(y0+y1)/2;view.scale=clamp(Math.min((W-80)/Math.max(x1-x0,WU),(H-80)/Math.max(y1-y0,WU)),0.1/WU,120/WU);updateStatus();redraw();}
 
 document.addEventListener("keydown",e=>{
   if(!document.getElementById("modal").hidden||view3d)return;
@@ -1615,6 +1655,10 @@ function renderLevel(p){
   const nm=document.createElement("input");nm.id="lvName";nm.maxLength=60;nm.value=i.name;nm.onchange=()=>{pushUndo();i.name=nm.value.slice(0,60)||"Untitled Level";changed();};
   g.appendChild(field("Name",nm));
   g.appendChild(field("Game",selectInput("lvGame",GAME_IDS.map(k=>[k,GAMES[k].name]),i.game,v=>{const was=i.game;i.game=v;if(v==="m1"&&was!=="m1")i.envFlags|=M1_FLAGS;if(v!=="m1"&&was==="m1")i.envFlags&=~M1_FLAGS;if(!envOptions(v).some(o=>o[0]===i.env))i.env=envOptions(v)[0][0];patternCache.clear();})));
+  g.appendChild(field("Made for",selectInput("lvTarget",[["aleph","Aleph One / Alpha One"],["unreal","Unreal remake"]],i.target==="unreal"?"unreal":"aleph",v=>{pushUndo();if(v==="unreal")i.target="unreal";else delete i.target;changed();})));
+  if(i.target==="unreal"){const un=document.createElement("p");un.className="note";un.id="lvTargetNote";
+    const past=pastMapEdge();un.textContent=past.length?"This level goes past Aleph One's edge, so only the Unreal remake can play it. The map file keeps the full size in an extra part that Aleph One skips.":"No size limit: the level can go past Aleph One's edge (about 32 WU from the centre). Until it does, it still plays in Aleph One.";
+    if(past.length)un.style.color="var(--warn)";g.appendChild(un);}
   g.appendChild(field("Environment",selectInput("lvEnv",envOptions(i.game),i.env,v=>{i.env=+v;patternCache.clear();})));
   const gn=document.createElement("p");gn.className="note";gn.textContent=GAMES[i.game].note;g.appendChild(gn);
   {const r=compatReasons();if(r){const cn=document.createElement("p");cn.className="note";cn.id="lvCompat";
@@ -2248,7 +2292,7 @@ function open3D(at={}){
   const scene=new THREE.Scene();
   const sky=[[96,130,170],[14,16,30],[30,30,40],[2,2,8]][doc.info.landscape]||[0,0,0];
   scene.background=new THREE.Color(`rgb(${sky})`);scene.fog=new THREE.Fog(scene.background,6,40);
-  const camera=new THREE.PerspectiveCamera(75,1,0.01,200);
+  const camera=new THREE.PerspectiveCamera(75,1,0.01,doc.info.target==="unreal"?4000:200);
   const S=1/WU;
   const mats=new Map();const disposables=[];
   // transfer modes are shown live: each animated group has its own texture, moved every frame by animateXfers
@@ -2496,7 +2540,7 @@ function open3D(at={}){
   const keys=new Set();const EYE=0.66*WU,BODY=0.8*WU,STEP=0.3*WU;
   let mvPoly=null; // the polygon the last allowed move ends in
   function canMove(nx,ny){
-    if(fly)return Math.abs(nx)<EDIT_MAX&&Math.abs(ny)<EDIT_MAX;
+    if(fly)return Math.abs(nx)<mapMax()&&Math.abs(ny)<mapMax();
     const q0=curPoly?trace(curPoly,st.x,st.y,nx,ny):polyAtPoint({x:nx,y:ny});if(!q0)return false;const q=hNow(q0);mvPoly=q0;
     if(q.floor-st.feet>STEP)return false;if(q.ceil-Math.max(q.floor,st.feet)<BODY)return false;
     for(const l of doc.lines)if(l.solid&&segIntersect({x:st.x,y:st.y},{x:nx,y:ny},l.a,l.b))return false;
@@ -2769,7 +2813,7 @@ function open3D(at={}){
     if(m>0){fx=fx/m*spd;fy=fy/m*spd;
       if(fly){const cp=Math.cos(st.pitch);st.x+=fx*cp;st.y+=fy*cp;if(keys.has("w")||keys.has("arrowup"))st.feet+=Math.sin(st.pitch)*spd;if(keys.has("s")||keys.has("arrowdown"))st.feet-=Math.sin(st.pitch)*spd;}
       else if(canMove(st.x+fx,st.y+fy)){st.x+=fx;st.y+=fy;moved=true;}else if(canMove(st.x+fx,st.y)){st.x+=fx;moved=true;}else if(canMove(st.x,st.y+fy)){st.y+=fy;moved=true;}}
-    st.x=clamp(st.x,-EDIT_MAX,EDIT_MAX);st.y=clamp(st.y,-EDIT_MAX,EDIT_MAX);
+    st.x=clamp(st.x,-mapMax(),mapMax());st.y=clamp(st.y,-mapMax(),mapMax());
     if(fly){if(keys.has("r"))st.feet+=spd;if(keys.has("c"))st.feet-=spd;}
     else{const q0=here();const q=q0?hNow(q0):null;if(q){if(st.feet<q.floor)st.feet=Math.min(q.floor,st.feet+4*WU*dt);else if(st.feet>q.floor){st.vy-=9*WU*dt;st.feet=Math.max(q.floor,st.feet+st.vy*dt);}if(st.feet<=q.floor)st.vy=0;}}
     if(!fly){if(moved&&mvPoly&&mvPoly!==curPoly){curPoly=mvPoly;entered(mvPoly);}}else curPoly=polyAtPoint(st);
@@ -3080,141 +3124,6 @@ function doExport(all){
 }
 function saveProject(){syncLevel();offerFile(safeName(scenario.name)+".forge.json",serializeScenario());}
 
-// =============================================================== export to Unreal (glTF 2.0, .glb)
-// Unreal Engine 5 imports glTF directly. glTF is in metres with Y up; Unreal's importer turns that into
-// centimetres and Z up by itself. The layout matches Forge's 3D view: map x → x, height → y, map y → z,
-// so the level looks the same from above as it does on the 2D map.
-// Default size: 1 World Unit = 225 cm, so Marathon's 0.8 WU player is 1.8 m, the height of Unreal's mannequin.
-const UNREAL_CM_PER_WU=225;
-// The level's surfaces grouped by texture, the way the 3D view draws them (doors and lifts in their starting position).
-// Coordinates are in Marathon's internal units (1 WU = 1024). Each triangle's corners are listed counter-clockwise
-// as seen from the side the surface faces, which is what glTF expects for a visible face.
-function unrealSurfaces(){
-  const groups=new Map();
-  const grp=(b,col,clut,kind="")=>{const key=`${b}:${col??""}:${clut|0}:${kind}`;if(!groups.has(key))groups.set(key,{key,b,col:col??null,clut:clut|0,kind,pos:[],nrm:[],uv:[]});return groups.get(key);};
-  const PI=platformInfo(doc);const H=q=>{const r=PI.get(q);return r?{floor:r.floor,ceil:r.ceil}:q;};
-  const edgeOwner=new Map();doc.polys.forEach((q,i)=>q.verts.forEach((v,k)=>edgeOwner.set(sideKey(v,q.verts[(k+1)%q.verts.length]),i)));
-  // one triangle: flips its corner order when needed so the face points along n
-  function tri(g,P,U,n){
-    const e1=[P[1][0]-P[0][0],P[1][1]-P[0][1],P[1][2]-P[0][2]],e2=[P[2][0]-P[0][0],P[2][1]-P[0][1],P[2][2]-P[0][2]];
-    const c=[e1[1]*e2[2]-e1[2]*e2[1],e1[2]*e2[0]-e1[0]*e2[2],e1[0]*e2[1]-e1[1]*e2[0]];
-    const order=c[0]*n[0]+c[1]*n[1]+c[2]*n[2]<0?[0,2,1]:[0,1,2];
-    for(const i of order){g.pos.push(...P[i]);g.nrm.push(...n);g.uv.push(...U[i]);}
-  }
-  function wall(q,a,b,y0,y1,part,inward){
-    if(y1-y0<1)return;const t=part==="trans"?((sideGet(a,b)||{}).trans):wallTex(q,a,b,part);if(!t)return;
-    const g=grp(t.b,t.col,t.clut,part==="trans"?"t":"");const len=Math.hypot(b.x-a.x,b.y-a.y);
-    const P=[[a.x,y0,a.y],[b.x,y0,b.y],[b.x,y1,b.y],[a.x,y1,a.y]];
-    const u0=(t.ox||0)/WU,u1=(len+(t.ox||0))/WU,vt=(t.oy||0)/WU,vb=((y1-y0)+(t.oy||0))/WU;
-    const U=[[u0,vb],[u1,vb],[u1,vt],[u0,vt]];
-    tri(g,[P[0],P[1],P[2]],[U[0],U[1],U[2]],inward);tri(g,[P[0],P[2],P[3]],[U[0],U[2],U[3]],inward);
-  }
-  function flat(g,verts,h,ox,oy,n){
-    for(let k=1;k<verts.length-1;k++){const T=[verts[0],verts[k],verts[k+1]];
-      tri(g,T.map(v=>[v.x,h,v.y]),T.map(v=>[(v.x+ox)/WU,(v.y+oy)/WU]),n);}
-  }
-  const liquids=[];
-  doc.polys.forEach(q=>{
-    const h=H(q),F=h.floor,C=h.ceil;
-    flat(grp(q.ftex,q.fcol,q.fclut),q.verts,F,q.fox||0,q.foy||0,[0,1,0]);
-    flat(grp(q.ctex,q.ccol,q.cclut),q.verts,C,q.cox||0,q.coy||0,[0,-1,0]);
-    if(q.media&&q.media.high>F){const m=q.media;const g=grp(MEDIA_TEX[m.type]??0,null,0,"m"+(m.type|0));g.media=m.type|0;if(!liquids.includes(g))liquids.push(g);flat(g,q.verts,Math.min(m.high,C),0,0,[0,1,0]);}
-    const cx=q.verts.reduce((s,v)=>s+v.x,0)/q.verts.length,cy=q.verts.reduce((s,v)=>s+v.y,0)/q.verts.length;
-    q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];
-      const oi=edgeOwner.get(sideKey(b,a));const o=oi!=null?H(doc.polys[oi]):null;
-      let nx=-(b.y-a.y),ny=b.x-a.x;const nl=Math.hypot(nx,ny)||1;nx/=nl;ny/=nl;
-      if(nx*(cx-(a.x+b.x)/2)+ny*(cy-(a.y+b.y)/2)<0){nx=-nx;ny=-ny;}
-      const inward=[nx,0,ny];
-      if(!o||o.floor>=C||o.ceil<=F)wall(q,a,b,F,C,"full",inward);
-      else{if(o.floor>F)wall(q,a,b,F,Math.min(o.floor,C),"lower",inward);if(o.ceil<C)wall(q,a,b,Math.max(o.ceil,F),C,"upper",inward);
-        if((sideGet(a,b)||{}).trans)wall(q,a,b,Math.max(o.floor,F),Math.min(o.ceil,C),"trans",inward);}
-    });
-  });
-  for(const [k,g] of groups)if(!g.pos.length)groups.delete(k);
-  return {solid:[...groups.values()].filter(g=>!liquids.includes(g)),liquids:liquids.filter(g=>g.pos.length)};
-}
-// a texture as PNG bytes; see-through textures (kind "t") get colour 0 made transparent, as in the 3D view
-function unrealPng(g){
-  const src=texCanvasFor(g.b,g.col??undefined,g.clut);const c=document.createElement("canvas");c.width=src.width;c.height=src.height;
-  const x=c.getContext("2d");x.drawImage(src,0,0);
-  if(g.kind==="t"){const im=x.getImageData(0,0,c.width,c.height);clearColour0(im,src);x.putImageData(im,0,0);}
-  const s=atob(c.toDataURL("image/png").split(",")[1]);const u=new Uint8Array(s.length);for(let i=0;i<s.length;i++)u[i]=s.charCodeAt(i);return u;
-}
-// Packs meshes, materials and PNG textures into one binary glTF (.glb) file.
-// meshes: [{name, primitives:[{pos, nrm, uv, material}]}]; materials: [{name, png, alpha:"OPAQUE"|"MASK"|"BLEND", color:[r,g,b,a], doubleSided}]
-function packGlb(meshes,materials,info={}){
-  const bin=[];let binLen=0;const views=[],accessors=[];
-  function view(bytes,target){const pad=(4-binLen%4)%4;if(pad){bin.push(new Uint8Array(pad));binLen+=pad;}
-    const v={buffer:0,byteOffset:binLen,byteLength:bytes.byteLength};if(target)v.target=target;bin.push(new Uint8Array(bytes.buffer,bytes.byteOffset,bytes.byteLength));binLen+=bytes.byteLength;views.push(v);return views.length-1;}
-  function acc(arr,type,n){const f=new Float32Array(arr);const a={bufferView:view(f,34962),componentType:5126,count:f.length/n,type};
-    if(type==="VEC3"){const mn=[Infinity,Infinity,Infinity],mx=[-Infinity,-Infinity,-Infinity];for(let i=0;i<f.length;i++){const k=i%3;if(f[i]<mn[k])mn[k]=f[i];if(f[i]>mx[k])mx[k]=f[i];}a.min=mn;a.max=mx;}
-    accessors.push(a);return accessors.length-1;}
-  const gm={meshes:[],nodes:[]};
-  for(const m of meshes){const prims=[];
-    for(const p of m.primitives){const n=p.pos.length/3;const idx=new Uint32Array(n);for(let i=0;i<n;i++)idx[i]=i;
-      const attributes={POSITION:acc(p.pos,"VEC3",3),NORMAL:acc(p.nrm,"VEC3",3),TEXCOORD_0:acc(p.uv,"VEC2",2)};
-      accessors.push({bufferView:view(idx,34963),componentType:5125,count:n,type:"SCALAR"});
-      prims.push({attributes,indices:accessors.length-1,material:p.material,mode:4});}
-    gm.meshes.push({name:m.name,primitives:prims});gm.nodes.push({name:m.name,mesh:gm.meshes.length-1});}
-  const images=[],textures=[];
-  const mats=materials.map(m=>{const out={name:m.name,pbrMetallicRoughness:{metallicFactor:0,roughnessFactor:1}};
-    if(m.color)out.pbrMetallicRoughness.baseColorFactor=m.color;
-    if(m.png){images.push({name:m.name,mimeType:"image/png",bufferView:view(m.png)});textures.push({sampler:0,source:images.length-1});out.pbrMetallicRoughness.baseColorTexture={index:textures.length-1};}
-    if(m.alpha&&m.alpha!=="OPAQUE")out.alphaMode=m.alpha;if(m.alpha==="MASK")out.alphaCutoff=0.5;if(m.doubleSided)out.doubleSided=true;return out;});
-  const json={asset:{version:"2.0",generator:"Forge Remake (Export to Unreal)"},scene:0,scenes:[{name:info.name||"Level",nodes:gm.nodes.map((_,i)=>i)}],nodes:gm.nodes,meshes:gm.meshes,materials:mats,
-    // nearest filtering keeps Marathon's pixel look; textures repeat across surfaces
-    samplers:[{magFilter:9728,minFilter:9986,wrapS:10497,wrapT:10497}],accessors,bufferViews:views,buffers:[{byteLength:0}]};
-  if(images.length){json.images=images;json.textures=textures;}else delete json.samplers;
-  if(info.extras)json.asset.extras=info.extras;
-  const binPad=(4-binLen%4)%4;json.buffers[0].byteLength=binLen+binPad;
-  let jb=new TextEncoder().encode(JSON.stringify(json));const jPad=(4-jb.length%4)%4;
-  const total=12+8+jb.length+jPad+8+binLen+binPad;const out=new Uint8Array(total);const dv=new DataView(out.buffer);
-  dv.setUint32(0,0x46546C67,true);dv.setUint32(4,2,true);dv.setUint32(8,total,true);
-  dv.setUint32(12,jb.length+jPad,true);dv.setUint32(16,0x4E4F534A,true);out.set(jb,20);out.fill(0x20,20+jb.length,20+jb.length+jPad);
-  let p=20+jb.length+jPad;dv.setUint32(p,binLen+binPad,true);dv.setUint32(p+4,0x004E4942,true);p+=8;
-  for(const b of bin){out.set(b,p);p+=b.byteLength;}
-  return out;
-}
-// The current level as a .glb for Unreal. cmPerWU sets the size of one World Unit in Unreal; liquids adds the liquid surfaces as their own mesh.
-function buildUnrealGlb({cmPerWU=UNREAL_CM_PER_WU,liquids=true}={}){
-  const {solid,liquids:liq}=unrealSurfaces();const s=cmPerWU/100/WU; // internal units → metres
-  const materials=[],meshes=[];
-  const texName=g=>`T${g.col??(17+doc.info.env)}_${g.b}${g.clut?"_c"+g.clut:""}`;
-  const prims=list=>list.map(g=>({pos:g.pos.map(v=>v*s),nrm:g.nrm,uv:g.uv,material:materials.length-1}));
-  const solidPrims=[];for(const g of solid){
-    materials.push({name:g.kind==="t"?texName(g)+"_SeeThrough":texName(g),png:unrealPng(g),alpha:g.kind==="t"?"MASK":"OPAQUE",doubleSided:g.kind==="t"});solidPrims.push(...prims([g]));}
-  const name=doc.info.name||"Level";
-  if(solidPrims.length)meshes.push({name,primitives:solidPrims});
-  let triangles=solid.reduce((n,g)=>n+g.pos.length/9,0);
-  if(liquids&&liq.length){const lp=[];for(const g of liq){const c=MEDIA_TINT[g.media]||[1,1,1];
-      materials.push({name:`Liquid_${(MEDIA_TYPES.find(m=>m[0]===g.media)||[0,"Liquid"])[1].replace(/\W+/g,"")}`,png:unrealPng(g),alpha:"BLEND",color:[c[0],c[1],c[2],0.65],doubleSided:true});lp.push(...prims([g]));
-      triangles+=g.pos.length/9;}
-    meshes.push({name:name+" liquids",primitives:lp});}
-  const file=packGlb(meshes,materials,{name,extras:{marathonWorldUnitCm:cmPerWU,level:name}});
-  return {file,stats:{triangles,materials:materials.length,liquids:liquids?liq.length:0}};
-}
-function exportUnreal(o={}){
-  if(!doc.polys.length){toast("Draw or generate a level first.");return false;}
-  let res;try{res=buildUnrealGlb(o);}catch(e){toast("Unreal export failed: "+e.message);return false;}
-  const name=safeName(doc.info.name);const mb=(res.file.length/1048576).toFixed(1);
-  status(`Built ${name}.glb for Unreal: ${res.stats.triangles} triangles, ${res.stats.materials} materials (${mb} MB).${realTextures()?"":" Textures are numbered stand-ins; load your Shapes file for the real ones."}`);
-  if(!inClaude())return offerFile(name+".glb",res.file);
-  const readme=new TextEncoder().encode(`${doc.info.name}\r\nMade with Forge Remake.\r\n\r\n${name}.glb is this level as a glTF 2.0 model for Unreal Engine 5.\r\nIn Unreal: File > Import Into Level, pick ${name}.glb, then Import.\r\n1 World Unit = ${o.cmPerWU||UNREAL_CM_PER_WU} cm.\r\n`);
-  return offerFile(name+" (Unreal).zip",zipFiles([{name:name+".glb",data:res.file},{name:"README.txt",data:readme}]));
-}
-function openUnrealExport(){
-  if(!doc.polys.length){toast("Draw or generate a level first.");return;}
-  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="10px";
-  const n=document.createElement("p");n.className="note";
-  n.innerHTML=`Saves “${doc.info.name.replace(/[<>&]/g,"")}” as a <b>.glb</b> model (glTF 2.0) with its floors, ceilings, walls and textures. In Unreal Engine 5, use <b>File → Import Into Level</b> and pick the file. Doors and lifts come out in their starting position; objects and lights aren't included.${realTextures()?"":" Load your Shapes file first to get the real textures; otherwise the numbered stand-ins go with it."}`;
-  body.appendChild(n);
-  const sc=numInput("ueScale",String(UNREAL_CM_PER_WU),"1",()=>{});body.appendChild(field("1 World Unit",sc,"cm"));
-  const ck=document.createElement("label");ck.className="checks";ck.innerHTML=`<input type="checkbox" id="ueLiquids" checked> Include liquid surfaces (as their own mesh)`;body.appendChild(ck);
-  openModal("Export to Unreal",body,[button("Cancel",closeModal),button("Export",()=>{const cm=clamp(parseFloat(sc.value)||UNREAL_CM_PER_WU,1,10000);const liquids=ck.querySelector("input").checked;closeModal();exportUnreal({cmPerWU:cm,liquids});},"primary")]);
-}
-$("bUnreal").onclick=openUnrealExport;
-// for the tests (kept apart from window.__forge so this stays a separate change)
-window.__forgeUnreal={unrealSurfaces,packGlb,buildUnrealGlb,exportUnreal,openUnrealExport,UNREAL_CM_PER_WU};
 
 // =============================================================== opening files
 async function openFileBuffer(buf,fname){
@@ -3306,7 +3215,8 @@ function startPlacing(B,name,o={}){
 function placeXY(p,P=placing){const u=p.x-P.cx,v=p.y-P.cy;const r=((P.rot%4)+4)%4;
   const [a,b]=r===0?[u,v]:r===1?[-v,u]:r===2?[-u,-v]:[v,-u];return {x:Math.round(P.tx+a),y:Math.round(P.ty+b)};}
 function placingBounds(){const ps=placing.B.pts.map(p=>placeXY(p));const xs=ps.map(p=>p.x),ys=ps.map(p=>p.y);return {x0:Math.min(...xs),x1:Math.max(...xs),y0:Math.min(...ys),y1:Math.max(...ys)};}
-function placingFits(){const b=placingBounds();const M=32767;return b.x0>=-M&&b.x1<=M&&b.y0>=-M&&b.y1<=M;}
+function placingFits(){if(doc.info.target==="unreal")return true; // the Unreal remake has no size limit
+  const b=placingBounds();const M=32767;return b.x0>=-M&&b.x1<=M&&b.y0>=-M&&b.y1<=M;}
 function fitPlacing(){const vs=[...doc.pts];const b=placingBounds();vs.push({x:b.x0,y:b.y0},{x:b.x1,y:b.y1});
   const xs=vs.map(v=>v.x),ys=vs.map(v=>v.y);const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
   view.cx=(x0+x1)/2;view.cy=(y0+y1)/2;view.scale=clamp(Math.min((W-80)/Math.max(x1-x0,WU),(H-80)/Math.max(y1-y0,WU)),2/WU,120/WU);updateStatus();redraw();}

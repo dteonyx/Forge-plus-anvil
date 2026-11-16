@@ -52,6 +52,49 @@ test("exported map re-imports and re-exports byte-identical", async () => {
   assert.ok(same);
 });
 
+test("a level made for the Unreal remake can go past Aleph One's edge (FP32 chunk)", async () => {
+  const r = await app.page.evaluate(() => {
+    const f = window.__forge, WU = 1024;
+    const spec = f.randomSpec(7, "medium", "solo");
+    f.applySpec(spec, false, "test");
+    const d = f.doc;
+    const tags = (file) => Object.keys(f.parseWad(file.buffer.slice(0)).levels[0].chunks);
+    const build = (x) => f.buildWadFile(f.buildMapChunks(x).chunks, "Big", 1);
+    const before = tags(build(d));
+    // move everything 50 WU east and lift the first room 40 WU
+    const DX = 50 * WU;
+    for (const p of d.pts) p.x += DX;
+    for (const o of d.objs) o.x += DX;
+    for (const n of d.notes || []) n.x += DX;
+    d.polys[0].floor += 40 * WU; d.polys[0].ceil += 40 * WU;
+    const errAleph = f.validate().filter((i) => i.lv === "error").map((i) => i.title);
+    d.info.target = "unreal";
+    const unrealIssues = f.validate().map((i) => `${i.lv}: ${i.title}`);
+    const a = build(d);
+    const back = f.levelToDoc(f.parseWad(a.buffer.slice(0)).levels[0]).doc;
+    const b = build(back);
+    return {
+      before, after: tags(a), errAleph, unrealIssues,
+      target: back.info.target,
+      maxX: Math.max(...back.pts.map((p) => p.x)), wantMaxX: Math.max(...d.pts.map((p) => p.x)),
+      objX: back.objs.map((o) => o.x).join(), wantObjX: d.objs.map((o) => o.x).join(),
+      floor0: back.polys[0].floor, wantFloor0: d.polys[0].floor,
+      same: a.length === b.length && a.every((v, i) => v === b[i]),
+    };
+  });
+  assert.ok(!r.before.includes("FP32"), "a level that fits has no extra chunk");
+  assert.ok(r.after.includes("FP32"));
+  assert.deepEqual(r.errAleph, [], "Aleph One levels only get warnings (the over-the-limit test stays possible)");
+  assert.ok(r.unrealIssues.includes("warn: Won't play in Aleph One or Alpha One"));
+  assert.ok(!r.unrealIssues.some((t) => t.startsWith("error")), r.unrealIssues.join("; "));
+  assert.equal(r.target, "unreal");
+  assert.ok(r.maxX > 32767);
+  assert.equal(r.maxX, r.wantMaxX);
+  assert.equal(r.objX, r.wantObjX);
+  assert.equal(r.floor0, r.wantFloor0);
+  assert.ok(r.same, "big level saves, reopens and saves byte-identical");
+});
+
 test("outside claude.ai, Export saves the .sceA file directly", async () => {
   const { page } = app;
   const [dl] = await Promise.all([page.waitForEvent("download"), page.evaluate(() => window.__forge.doExport(false))]);
