@@ -323,9 +323,23 @@ function validate(){
   for(const [k,sd] of doc.sides){if(!sd.panel)continue;const key=panelKeyOf(sd.panel.type);
     if(key==="terminal"&&sd.panel.perm>=(doc.terms||[]).length)out.push({lv:"warn",title:`A terminal panel uses terminal ${sd.panel.perm}, which doesn't exist`,detail:`This level has ${(doc.terms||[]).length} terminal${(doc.terms||[]).length===1?"":"s"}. Add one in the Level tab.`});
     if(key==="platform"&&sd.panel.perm>=0){const q=doc.polys[sd.panel.perm];if(!q||q.type!==5)out.push({lv:"warn",title:`A platform switch points at polygon ${sd.panel.perm}, which isn't a door or lift`,detail:"Right-click the switch in 3D and set the right polygon number."});}}
+  limitIssues(out);
   extractionIssues(out);
   if(!doc.polys.length)out.push({lv:"warn",title:"The level is empty",detail:"Draw a room with the Room tool, or use Generate."});
   return out;
+}
+
+// Aleph One's size limits: warnings only, so maps past them can still be exported to test what the game does
+function limitIssues(out){
+  const LIM=32767,outP=doc.pts.filter(p=>Math.abs(p.x)>LIM||Math.abs(p.y)>LIM);
+  if(outP.length){const polys=doc.polys.filter(q=>q.verts.some(v=>outP.includes(v)));
+    out.push({lv:"warn",title:`${outP.length} point${outP.length>1?"s are":" is"} past the edge of the map area`,detail:`Aleph One stores positions in 16 bits, so the map can only reach about 32 WU from the centre. ${polys.length} polygon${polys.length===1?" uses":"s use"} them. On export they're squashed onto the edge, unless you tick the over-the-limit test in the Export window (then they wrap round to the other side).`,target:polys.length?{kind:"poly",items:polys}:{kind:"point",items:outP}});}
+  const hi=doc.polys.filter(q=>Math.abs(q.floor)>LIM||Math.abs(q.ceil)>LIM||(q.media&&(Math.abs(q.media.low)>LIM||Math.abs(q.media.high)>LIM)));
+  if(hi.length)out.push({lv:"warn",title:`${hi.length} polygon${hi.length>1?"s have":" has"} a height past the limit`,detail:"Floors, ceilings and liquids can only go from about −32 to +32 WU. On export they're squashed to the limit, unless you tick the over-the-limit test (then they wrap round).",target:{kind:"poly",items:hi}});
+  if(doc.polys.length){let lo=Infinity,top=-Infinity;for(const q of doc.polys){lo=Math.min(lo,q.floor);top=Math.max(top,q.ceil);}
+    if(top-lo>LIM&&!hi.length)out.push({lv:"warn",title:`Heights span ${fmt(top-lo)} WU`,detail:`From the lowest floor (${fmt(lo)}) to the highest ceiling (${fmt(top)}) is more than 32 WU. Aleph One works out height differences in 16 bits too, so very tall gaps may glitch. Keeping everything within 32 WU is safe.`});}
+  const farObj=doc.objs.filter(o=>Math.abs(o.x)>LIM||Math.abs(o.y)>LIM);
+  if(farObj.length)out.push({lv:"warn",title:`${farObj.length} object${farObj.length>1?"s are":" is"} past the edge of the map area`,detail:"Same 16-bit limit as the map's points.",target:{kind:"obj",items:farObj}});
 }
 
 // =============================================================== Extraction map conventions (MAP_CONVENTIONS.md, draft v0.1)
@@ -631,6 +645,10 @@ function compileTerminal(script){
 const PHYSICS_TAGS=["MNpx","FXpx","PRpx","PXpx","WPpx"];
 
 // =============================================================== export to Aleph One (.sceA)
+// Aleph One stores positions and heights as 16-bit numbers (−32768…32767). Past that, export either squashes
+// values onto the limit (default) or, for testing, writes them as they are, which wraps them round to the other end.
+let exportWrap=false;
+const lim16=v=>exportWrap?Math.round(v):clamp(Math.round(v),-32768,32767);
 const lightIndex=pct=>clamp(Math.round((100-pct)/5),0,20);
 const PLAT_DEFAULT=()=>({type:0,speed:34,delay:120,min:-1,max:-1,flags:(1<<1)|(1<<3)|(1<<5)|(1<<7)|(1<<13)|(1<<14)|(1<<15)|(1<<26),tag:0});
 function buildMapChunks(d=doc){
@@ -669,7 +687,7 @@ function buildMapChunks(d=doc){
     if(A&&(!B||A.floor<B.floor||A.ceil>B.ceil||A.type===5||B.type===5||sa.trans||sa.panel))e.cws=newSide(e.cw,e,B,sa);
     if(B&&(!A||B.floor<A.floor||B.ceil>A.ceil||A.type===5||B.type===5||sb.trans||sb.panel))e.ccws=newSide(e.ccw,e,A,sb);});
   const chunks=[];
-  let w=new BW();for(const p of pts){w.i16(clamp(p.x,-32768,32767));w.i16(clamp(p.y,-32768,32767));}chunks.push(["PNTS",w.out()]);
+  let w=new BW();for(const p of pts){w.i16(lim16(p.x));w.i16(lim16(p.y));}chunks.push(["PNTS",w.out()]);
   w=new BW();
   for(const e of L){const A=polys[e.cw],B=polys[e.ccw];
     let flags;
@@ -679,7 +697,7 @@ function buildMapChunks(d=doc){
     else flags=0x2000;
     const hf=A&&B?Math.max(A.floor,B.floor):(A||B).floor, lc=A&&B?Math.min(A.ceil,B.ceil):(A||B).ceil;
     w.i16(pIdx.get(e.l.a));w.i16(pIdx.get(e.l.b));w.i16(flags);w.i16(Math.min(32767,Math.round(hyp(e.l.a.x,e.l.a.y,e.l.b.x,e.l.b.y))));
-    w.i16(hf);w.i16(lc);w.i16(e.cws);w.i16(e.ccws);w.i16(e.cw);w.i16(e.ccw);w.zeros(12);}
+    w.i16(lim16(hf));w.i16(lim16(lc));w.i16(e.cws);w.i16(e.ccws);w.i16(e.cw);w.i16(e.ccw);w.zeros(12);}
   chunks.push(["LINS",w.out()]);
   w=new BW();
   for(const s of sides){w.i16(s.t);w.i16(s.flags);w.i16(s.x);w.i16(s.y);w.i16(s.tex);w.i16(s.x2);w.i16(s.y2);w.i16(s.tex2);w.i16(s.x3);w.i16(s.y3);w.i16(s.tex3);
@@ -697,7 +715,7 @@ function buildMapChunks(d=doc){
     w.i16(q.type);w.i16(0);w.i16(perm);w.i16(n);
     for(let k=0;k<8;k++)w.i16(k<n?pIdx.get(q.verts[k]):-1);
     for(let k=0;k<8;k++)w.i16(k<n?lIdx.get(edges[k].l):-1);
-    w.i16(shape(q.ftex,q.fcol,q.fclut));w.i16(shape(q.ctex,q.ccol,q.cclut));w.i16(q.floor);w.i16(q.ceil);w.i16(lidx(q.flight??q.light,q.fli));w.i16(lidx(q.clight??q.light,q.cli));
+    w.i16(shape(q.ftex,q.fcol,q.fclut));w.i16(shape(q.ctex,q.ccol,q.cclut));w.i16(lim16(q.floor));w.i16(lim16(q.ceil));w.i16(lidx(q.flight??q.light,q.fli));w.i16(lidx(q.clight??q.light,q.cli));
     w.i32(0);w.i16(-1);w.i16(-1);w.i16(-1);w.i16(-1);w.i16(q.fxfer|0);w.i16(q.cxfer|0);
     for(let k=0;k<8;k++){if(k>=n){w.i16(-1);continue;}const e=edges[k];w.i16(e.cw===i?e.ccw:e.cw);}
     w.i16(-1);w.i16(-1);const c=centroid(q.verts);w.i16(c.x);w.i16(c.y);
@@ -717,7 +735,7 @@ function buildMapChunks(d=doc){
   w=new BW();let dropped=0;
   for(const o of d.objs){const q=objPoly(o,d);if(!q){dropped++;continue;}
     const facing=o.kind===5?(o.sub2|0):Math.round((((o.facing%360)+360)%360)*512/360)%512;
-    w.i16(o.kind);w.i16(o.sub|0);w.i16(facing);w.i16(polys.indexOf(q));w.i16(o.x);w.i16(o.y);w.i16(o.z|0);w.i16(o.flags|0);}
+    w.i16(o.kind);w.i16(o.sub|0);w.i16(facing);w.i16(polys.indexOf(q));w.i16(lim16(o.x));w.i16(lim16(o.y));w.i16(o.z|0);w.i16(o.flags|0);}
   chunks.push(["OBJS",w.out()]);
   w=new BW();w.i16(d.info.env);w.i16(0);w.i16(d.info.landscape);w.i16(d.info.mission);w.i16(d.info.envFlags);w.zeros(8);w.str(d.info.name||"Untitled Level",66);w.i32(d.info.entry||1);
   chunks.push(["Minf",w.out()]);
@@ -729,9 +747,9 @@ function buildMapChunks(d=doc){
   for(const [kind,key] of [[2,"items"],[0,"monsters"]])for(let i=0;i<64;i++){const r=(pl[key]&&pl[key][i])||[0,0,0,0,0,0];
     w.i16(r[0]);w.i16(Math.max(cnt[kind][i],(r[0]&1)?r[1]:0));w.i16(r[2]);w.i16(r[3]);w.i16(r[4]);w.i16(r[5]);}
   chunks.push(["plac",w.out()]);
-  w=new BW();for(const pf of plats){w.i16(pf.type);w.i16(pf.speed);w.i16(pf.delay);w.i16(pf.max);w.i16(pf.min);w.i32(pf.flags>>>0);w.i16(pf.poly);w.i16(pf.tag|0);w.zeros(14);}
+  w=new BW();for(const pf of plats){w.i16(pf.type);w.i16(pf.speed);w.i16(pf.delay);w.i16(pf.max===-1?-1:lim16(pf.max));w.i16(pf.min===-1?-1:lim16(pf.min));w.i32(pf.flags>>>0);w.i16(pf.poly);w.i16(pf.tag|0);w.zeros(14);}
   chunks.push(["plat",w.out()]);
-  w=new BW();for(const m of media){w.i16(m.type|0);w.i16(m.flags|0);w.i16(m.li!=null&&m.li<lightBase?m.li:lightBase);w.i16(Math.round(((m.dir||0)%360+360)%360*512/360)%512);w.i16(m.speed|0);w.i16(m.low);w.i16(m.high);w.zeros(6);w.fixed(m.minLight||0);w.i16(0);w.i16(0);w.zeros(4);}
+  w=new BW();for(const m of media){w.i16(m.type|0);w.i16(m.flags|0);w.i16(m.li!=null&&m.li<lightBase?m.li:lightBase);w.i16(Math.round(((m.dir||0)%360+360)%360*512/360)%512);w.i16(m.speed|0);w.i16(lim16(m.low));w.i16(lim16(m.high));w.zeros(6);w.fixed(m.minLight||0);w.i16(0);w.i16(0);w.zeros(4);}
   chunks.push(["medi",w.out()]);
   chunks.push(["ambi",d.ambi?b64dec(d.ambi):new Uint8Array(0)]);
   chunks.push(["bonk",d.bonk?b64dec(d.bonk):new Uint8Array(0)]);
@@ -2957,7 +2975,9 @@ function openExport(){
   body.innerHTML=`<label class="checks"><input type="radio" name="exWhat" id="exAll" ${n>1?"checked":""}> <span><b>Whole scenario</b>: all ${n} level${n>1?"s":""}, with their terminals and physics, plus ${scenario.pictures.length} picture${scenario.pictures.length===1?"":"s"}</span></label>
   <label class="checks"><input type="radio" name="exWhat" id="exOne" ${n>1?"":"checked"}> <span><b>Only “${doc.info.name.replace(/[<>&]/g,"")}”</b> (level ${scenario.cur})</span></label>
   <p class="note">${inClaude()?"You get a zip with the map file and a short readme.":"You get the map file (.sceA)."} In Aleph One, put the map in your scenario's folder in place of <b>Map.sceA</b> (keep a copy of the original), or select it as the map file. Pictures travel inside the map file, as in Bungie's.</p>`;
-  openModal("Export for Aleph One",body,[button("Cancel",closeModal),button("Export",()=>{const allLv=body.querySelector("#exAll").checked;closeModal();doExport(allLv);},"primary")]);
+  const over=issues.some(i=>/past the edge of the map area|height past the limit/.test(i.title));
+  if(over){const t=document.createElement("label");t.className="checks";t.innerHTML=`<input type="checkbox" id="exWrap"> <span><b>Over-the-limit test</b>: this level goes past Aleph One's 16-bit limits (see Checks). Normally those parts are squashed onto the limit. Tick this to write them as they are instead, so you can see what the game does (they wrap round to the other end).</span>`;body.appendChild(t);}
+  openModal("Export for Aleph One",body,[button("Cancel",closeModal),button("Export",()=>{const allLv=body.querySelector("#exAll").checked;const wrap=!!(over&&body.querySelector("#exWrap").checked);closeModal();exportWrap=wrap;try{doExport(allLv);}finally{exportWrap=false;}},"primary")]);
 }
 function doExport(all){
   syncLevel();
@@ -3202,7 +3222,7 @@ function startPlacing(B,name){
 function placeXY(p,P=placing){const u=p.x-P.cx,v=p.y-P.cy;const r=((P.rot%4)+4)%4;
   const [a,b]=r===0?[u,v]:r===1?[-v,u]:r===2?[-u,-v]:[v,-u];return {x:Math.round(P.tx+a),y:Math.round(P.ty+b)};}
 function placingBounds(){const ps=placing.B.pts.map(p=>placeXY(p));const xs=ps.map(p=>p.x),ys=ps.map(p=>p.y);return {x0:Math.min(...xs),x1:Math.max(...xs),y0:Math.min(...ys),y1:Math.max(...ys)};}
-function placingFits(){const b=placingBounds();return b.x0>=-MAXC&&b.x1<=MAXC&&b.y0>=-MAXC&&b.y1<=MAXC;}
+function placingFits(){const b=placingBounds();const M=32767;return b.x0>=-M&&b.x1<=M&&b.y0>=-M&&b.y1<=M;}
 function fitPlacing(){const vs=[...doc.pts];const b=placingBounds();vs.push({x:b.x0,y:b.y0},{x:b.x1,y:b.y1});
   const xs=vs.map(v=>v.x),ys=vs.map(v=>v.y);const x0=Math.min(...xs),x1=Math.max(...xs),y0=Math.min(...ys),y1=Math.max(...ys);
   view.cx=(x0+x1)/2;view.cy=(y0+y1)/2;view.scale=clamp(Math.min((W-80)/Math.max(x1-x0,WU),(H-80)/Math.max(y1-y0,WU)),2/WU,120/WU);updateStatus();redraw();}
@@ -3240,7 +3260,7 @@ function drawPlacing(){
 }
 function dropPlacing(){
   if(!placing)return;
-  if(!placingFits()){toast("Part of the added map is outside the map area. Move it closer to the middle.");return;}
+  if(!placingFits()&&!dropPlacing.ok){confirmBox("Past the map area","Part of the added map is past the edge of Aleph One's map area (about 32 WU from the centre). The Checks tab will warn about it, and on export those parts get squashed onto the edge unless you use the over-the-limit test. Place it anyway?","Place anyway",()=>{dropPlacing.ok=true;try{dropPlacing();}finally{dropPlacing.ok=false;}});return;}
   const A=doc,B=placing.B;
   const diffs=[];
   const physKey=d=>JSON.stringify(d.physics&&d.physics.mode!=="none"?d.physics:{mode:"none"});
@@ -3722,7 +3742,7 @@ requestAnimationFrame(()=>{resize();fitView();});
         clearTimeout(scenTimer);try{await idb.put("scenario",serializeScenario());}catch(e){}location.replace(location.pathname+"?v="+encodeURIComponent(v));return;}}}catch(e){}
     busy=false;};
   setInterval(check,4000);window.addEventListener("focus",check);})();
-window.__forge={scenario,setLayer,layerVis,teleClick,get layer(){return curLayer();},openAddMap,addMapFromBuffer,startPlacing,dropPlacing,finishMerge,mergeInto,get placing(){return placing;},switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;resetPolyRefs();changed();}};
+window.__forge={scenario,setExportWrap:v=>{exportWrap=v;},setLayer,layerVis,teleClick,get layer(){return curLayer();},openAddMap,addMapFromBuffer,startPlacing,dropPlacing,finishMerge,mergeInto,get placing(){return placing;},switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;resetPolyRefs();changed();}};
 Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
   makePolygonFromCoords,addPointAt,addSegment,fillAt,objPoly,
   screenOf(x,y){const r=canvas.getBoundingClientRect();const [sx,sy]=toS(x,y);return {x:r.left+sx,y:r.top+sy};},centroid,fitView});

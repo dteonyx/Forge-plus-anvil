@@ -210,3 +210,24 @@ test("merging adds the two maps' respawn settings together", async () => {
   });
   assert.deepEqual(r, [1, 5, 3, 9, -1, 20000]);
 });
+
+test("past Aleph One's limits: Checks warns, export squashes by default and wraps in the test mode", async () => {
+  const r = await app.page.evaluate(() => {
+    const f = window.__forge;
+    f.applySpec(f.randomSpec(51, "small", "solo"), false, "a");
+    const d = f.doc;
+    const far = 33 * 1024;
+    const q = d.polys[0]; for (const v of q.verts) v.x += far; q.ceil = 34 * 1024;
+    const warns = f.validate().filter((i) => /past the edge|height past the limit/.test(i.title)).map((i) => i.lv);
+    const read = () => f.levelToDoc(f.parseWad(f.buildWadFile(f.buildMapChunks(d).chunks, "L", 1).buffer.slice(0)).levels[0]).doc;
+    const a = read(); const ax = Math.max(...a.polys[0].verts.map((v) => v.x)), ac = a.polys[0].ceil;
+    f.setExportWrap(true); const b = read(); f.setExportWrap(false);
+    const bx = Math.min(...b.polys[0].verts.map((v) => v.x)), bc = b.polys[0].ceil;
+    return { warns, ax, ac, bx, bc };
+  });
+  assert.deepEqual(r.warns, ["warn", "warn"]);
+  assert.equal(r.ax, 32767);
+  assert.equal(r.ac, 32767);
+  assert.ok(r.bx < 0, "wrapped round to the other side");
+  assert.ok(r.bc < 0, "height wrapped round");
+});
