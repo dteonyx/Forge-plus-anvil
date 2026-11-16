@@ -4,7 +4,9 @@ import { startServer } from "./server.mjs";
 // Opens the editor in headless Chromium. External requests (Google Fonts) are blocked so tests run offline.
 export async function openForge() {
   const server = await startServer();
-  const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM } : {});
+  // software WebGL (SwiftShader) so the visual view can run headless when the real three.js is installed
+  const args = ["--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader"];
+  const browser = await chromium.launch(process.env.PW_CHROMIUM ? { executablePath: process.env.PW_CHROMIUM, args } : { args });
   const page = await browser.newPage({ viewport: { width: 1400, height: 860 }, acceptDownloads: true });
   const errors = [];
   page.on("pageerror", (e) => errors.push(String(e)));

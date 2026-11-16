@@ -257,9 +257,10 @@ test("spawn table edits reach the exported map", async () => {
   const { page } = app;
   const placed = await page.evaluate(() => { const f = window.__forge; const d = f.doc; const q = d.polys[0]; const c = f.centroid(q.verts);
     d.objs.push({ kind: 2, sub: 1, x: Math.round(c.x), y: Math.round(c.y), z: 0, facing: 0, flags: 0 }); f.openSpawnTable("items"); return 1; });
-  await page.fill("#spitems1_3", "4"); await page.dispatchEvent("#spitems1_3", "change");
-  await page.check("#spitems1_inf");
-  await page.fill("#spitems1_ch", "40"); await page.dispatchEvent("#spitems1_ch", "change");
+  await page.selectOption("#spType", "1");
+  await page.fill("#spMax", "4"); await page.dispatchEvent("#spMax", "change");
+  await page.check("#spInf");
+  await page.fill("#spCh", "40"); await page.dispatchEvent("#spCh", "change");
   await page.click("#dialog footer >> text=Save");
   const r = await page.evaluate(() => { const f = window.__forge; const u = f.buildMapChunks(f.doc).chunks.find((c) => c[0] === "plac")[1];
     const v = new DataView(u.buffer, u.byteOffset, u.byteLength); const o = 1 * 12; return [0, 2, 4, 6, 8, 10].map((k) => v.getInt16(o + k)); });
@@ -436,10 +437,13 @@ test("a door made in Forge+ exports with a texture on the walls that face it (it
     for (let i = 0; i < S.byteLength / 64; i++) {
       const o = i * 64, tex = S.getUint16(o + 8), poly = S.getInt16(o + 48), line = S.getInt16(o + 50);
       const cw = L.getInt16(line * 32 + 16), ccw = L.getInt16(line * 32 + 18);
-      if (poly !== di && (cw === di || ccw === di)) out.push(tex);
+      if (poly !== di && (cw === di || ccw === di)) out.push({ tex, t: S.getInt16(o) });
     }
     return out;
   });
   assert.equal(r.length, 2, "both rooms have a side facing the door");
-  for (const tex of r) assert.notEqual(tex, 0xffff, "the door's closed face has a texture");
+  for (const { tex, t } of r) {
+    assert.notEqual(tex, 0xffff, "the door's closed face has a texture");
+    assert.equal(t, 1, "a high side, like Aleph One gives it: covers the doorway when shut, the lintel when open");
+  }
 });

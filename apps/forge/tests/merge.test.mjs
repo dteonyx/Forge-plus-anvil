@@ -280,3 +280,24 @@ test("Move map: the whole level moves back inside the map area, with its objects
   const u = await page.evaluate(() => Math.min(...window.__forge.doc.pts.map((p) => p.x)));
   assert.equal(u, r.min0, "undo puts it back");
 });
+
+test("Network setup: the item editor and the player-start teams (incl. Random) reach the exported map", async () => {
+  const { page } = app;
+  await page.evaluate(() => { const f = window.__forge; f.applySpec(f.randomSpec(81, "small", "carnage"), false, "a"); f.openSpawnTable("items"); });
+  await page.selectOption("#spType", "0");
+  await page.fill("#spMin", "2"); await page.locator("#spMin").dispatchEvent("change");
+  await page.fill("#spMax", "4"); await page.locator("#spMax").dispatchEvent("change");
+  await page.check("#spRnd");
+  await page.click("#netTab_players");
+  await page.selectOption("#nsTeam0", "-1");
+  await page.locator("#modal button", { hasText: "Save" }).click();
+  const r = await page.evaluate(() => {
+    const f = window.__forge, d = f.doc;
+    const back = f.levelToDoc(f.parseWad(f.buildWadFile(f.buildMapChunks(d).chunks, "N", 1).buffer.slice(0)).levels[0]).doc;
+    return { row: back.placement.items[0], team: back.objs.filter((o) => o.kind === 3)[0].sub };
+  });
+  assert.equal(r.row[2], 2);
+  assert.equal(r.row[3], 4);
+  assert.equal(r.row[0] & 1, 1);
+  assert.equal(r.team, -1);
+});

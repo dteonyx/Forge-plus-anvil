@@ -49,6 +49,8 @@ const GAME_TYPES = [[1,"Solo"],[2,"Co-op"],[4,"Carnage"],[8,"Kill the man with t
 const ENV_FLAGS = [[1,"Vacuum"],[2,"Magnetic"],[4,"Rebellion"],[8,"Low gravity"]];
 const MISSIONS = [[1,"Extermination"],[2,"Exploration"],[4,"Retrieval"],[8,"Repair"],[16,"Rescue"]];
 const M1_COMPAT = [[0x0200,"M1 monster activation range"],[0x0400,"M1 weapons"],[0x0010,"M1 glue polygons"],[0x0020,"Floor is lava (M1 ouch)"],[0x0040,"M1 rebellion"],[0x0080,"Landscape picks music"],[0x0100,"Terminals stop time"]];
+const TEAMS = [[-1,"Random (any team)"],[0,"Violet"],[1,"Red"],[2,"Tan"],[3,"Light blue"],[4,"Yellow"],[5,"Brown"],[6,"Blue"],[7,"Green"]];
+const ITEM_FLAGS = [[1,"Invisible at the start (teleports in)"],[32,"Network games only"]];
 const MON_FLAGS = [[1,"Teleports in"],[2,"From ceiling"],[4,"Blind"],[8,"Deaf"],[16,"Floats / teleports out"],[32,"Network only"]];
 const GRIDS = [[64,"1/16 WU"],[128,"1/8 WU"],[256,"1/4 WU"],[512,"1/2 WU"],[1024,"1 WU"]];
 const MAXC = 32000; // the game's map area (16-bit positions), drawn as the dashed border
@@ -323,7 +325,7 @@ function validate(){
     for(const id of r.picts||[])if(id&&!pictureById(id))out.push({lv:"warn",title:`Terminal ${i} shows picture ${id}, which isn't in the scenario`,detail:"Add it in Pictures (Levels tab), or the game shows nothing there."});});
   for(const [k,sd] of doc.sides){if(!sd.panel)continue;const key=panelKeyOf(sd.panel.type);
     if(key==="terminal"&&sd.panel.perm>=(doc.terms||[]).length)out.push({lv:"warn",title:`A terminal panel uses terminal ${sd.panel.perm}, which doesn't exist`,detail:`This level has ${(doc.terms||[]).length} terminal${(doc.terms||[]).length===1?"":"s"}. Add one in the Level tab.`});
-    if(key==="platform"&&sd.panel.perm>=0){const q=doc.polys[sd.panel.perm];if(!q||q.type!==5)out.push({lv:"warn",title:`A platform switch points at polygon ${sd.panel.perm}, which isn't a door or lift`,detail:"Right-click the switch in 3D and set the right polygon number."});}}
+    if(key==="platform"&&sd.panel.perm>=0){const q=doc.polys[sd.panel.perm];if(!q||q.type!==5)out.push({lv:"warn",title:`A platform switch points at polygon ${sd.panel.perm}, which isn't a door or lift`,detail:"Right-click the switch in the visual view and set the right polygon number."});}}
   limitIssues(out);
   extractionIssues(out);
   if(!doc.polys.length)out.push({lv:"warn",title:"The level is empty",detail:"Draw a room with the Room tool, or use Generate."});
@@ -669,7 +671,12 @@ function buildMapChunks(d=doc){
   const sides=[];
   const PI=platformInfo(d);
   const effP=q=>q.type===5&&PI.get(q)?{floor:PI.get(q).minF,ceil:PI.get(q).maxC}:q, effO=q=>q.type===5&&PI.get(q)?{floor:PI.get(q).maxF,ceil:PI.get(q).minC}:q;
-  function sideType(p,o){if(!o)return 0;p=effP(p);o=effO(o);if(o.floor>=p.ceil||o.ceil<=p.floor)return 0;const lo=o.floor>p.floor,hi=o.ceil<p.ceil;return lo&&hi?4:hi?1:lo?2:0;}
+  // Aleph One never works side types out again while platforms move: it draws each side by the type saved here, using the
+  // line's current heights. So a side touching a door or lift gets the type Aleph One itself gives it (recalculate_side_type:
+  // this polygon fully open against the other fully closed). A wall facing a door is then a "high" side that covers the
+  // doorway while it's shut and shrinks to the lintel as it opens. Other sides keep the plain rule.
+  function sideType(p,o){if(!o)return 0;const plat=p.type===5||o.type===5;p=effP(p);o=effO(o);
+    if(!plat&&(o.floor>=p.ceil||o.ceil<=p.floor))return 0;const lo=o.floor>p.floor,hi=o.ceil<p.ceil;return lo&&hi?4:hi?1:lo?2:0;}
   function newSide(pi,e,o,s){const p=polys[pi];const t=sideType(p,o);
     // seen at all? Judge it at the platforms' furthest positions (a door closed, a lift at the end of its travel), not at the
     // heights stored here: Forge+ keeps a door's open heights, so a closed door's face used to be saved with no texture
@@ -1348,6 +1355,7 @@ document.addEventListener("keydown",e=>{
     if(!["0","=","+","-","g"].includes(k))return;
   }
   if(k==="pageup"||k==="pagedown"){e.preventDefault();stepLayer(k==="pageup"?1:-1);return;}
+  if(mod&&k==="i"){e.preventDefault();openSpawnTable("items");return;}
   const tmap={v:"select",l:"line",r:"rect",f:"fill",o:"object",n:"note",h:"pan",t:"tele"};
   if(tmap[k]){setTool(tmap[k]);return;}
   if(k==="escape"&&teleFrom){teleFrom=null;status("Teleporter link cancelled.");redraw();return;}
@@ -1489,7 +1497,7 @@ function renderPane(){
     for(const [l,t] of [["Draw a room","rect"],["Draw lines","line"],["Place objects","object"]])g.appendChild(button(l,()=>setTool(t)));
     g.appendChild(button("Generate a level…",openGenerate,"primary"));
     p.appendChild(g);
-    const k=group("Shortcuts");const n2=document.createElement("p");n2.className="note";n2.innerHTML="V select · L lines · R room · F fill · O objects · N labels · H pan<br>1–7 view modes · G snap · 0 fit · Tab 3D view · P paint in 3D<br>Delete removes · Shift+Delete removes a room and its walls<br>Ctrl+Z undo · Ctrl+Shift+Z redo · Ctrl+A select all";k.appendChild(n2);p.appendChild(k);
+    const k=group("Shortcuts");const n2=document.createElement("p");n2.className="note";n2.innerHTML="V select · L lines · R room · F fill · O objects · N labels · H pan<br>1–7 view modes · G snap · 0 fit · Tab visual view<br>Delete removes · Shift+Delete removes a room and its walls<br>Ctrl+Z undo · Ctrl+Shift+Z redo · Ctrl+A select all";k.appendChild(n2);p.appendChild(k);
     return;}
   const items=sel.items,one=items[0];
   if(sel.kind==="poly"){
@@ -1516,10 +1524,10 @@ function renderPane(){
     g3.appendChild(texField("Walls","pWt",one.wtex,(v,c)=>all(q=>{if(c==null){q.wtex=v;return;}
       q.verts.forEach((a,k)=>{const b=q.verts[(k+1)%q.verts.length];for(const part of ["full","upper","lower"]){const cur=(sideGet(a,b)||{})[part];const t={...(cur||{ox:0,oy:0}),b:v,col:c};delete t.clut;if(t.xfer===XFER_LANDSCAPE)delete t.xfer;sideSet(a,b,part,t);}});})));
     const painted=items.reduce((n,q)=>n+q.verts.filter((v,k)=>sideGet(v,q.verts[(k+1)%q.verts.length])).length,0);
-    const tn=document.createElement("p");tn.className="note";tn.textContent=(realTextures()?"":"Load your Shapes file to see the real textures. ")+(painted?`${painted} wall${painted>1?"s were":" was"} painted in 3D and keep${painted>1?"":"s"} its own texture.`:"Paint individual walls in the 3D view (P).");g3.appendChild(tn);
+    const tn=document.createElement("p");tn.className="note";tn.textContent=(realTextures()?"":"Load your Shapes file to see the real textures. ")+(painted?`${painted} wall${painted>1?"s were":" was"} painted in the visual view and keep${painted>1?"":"s"} its own texture.`:"Paint individual walls in the visual view: Visual view here opens it standing in this polygon.");g3.appendChild(tn);
     const tr=document.createElement("div");tr.className="row";
     if(painted)tr.appendChild(button("Clear painted walls",()=>{pushUndo();items.forEach(q=>q.verts.forEach((v,k)=>doc.sides.delete(sideKey(v,q.verts[(k+1)%q.verts.length]))));changed();}));
-    tr.appendChild(button("Paint in 3D",()=>{paletteShown=true;open3D();}));g3.appendChild(tr);p.appendChild(g3);
+    tr.appendChild(button("Visual view here",()=>{paletteShown=true;open3D({poly:one});}));g3.appendChild(tr);p.appendChild(g3);
     const g4=group("Actions");const r=document.createElement("div");r.className="row";
     r.appendChild(button("Match neighbor heights",()=>{const nb=doc.polys.find(q=>!items.includes(q)&&one.verts.some((v,i)=>polyHasEdge(q,v,one.verts[(i+1)%one.verts.length])));if(!nb){status("No neighbouring polygon.");return;}pushUndo();all(q=>{q.floor=nb.floor;q.ceil=nb.ceil;});changed();}));
     if(items.some(q=>q.verts.length>8))r.appendChild(button("Split",()=>{pushUndo();items.forEach(splitPolygon);changed();}));
@@ -1547,7 +1555,7 @@ function renderPane(){
     g.appendChild(field("Kind",selectInput("oKind",OBJ_KINDS,one.kind,v=>items.forEach(o=>{o.kind=+v;o.sub=+v===0?8:+v===2?5:0;}))));
     if(one.kind===0)g.appendChild(field("Monster",selectInput("oMon",MONSTERS.map(([,n],i)=>[i,n]),one.sub,v=>items.forEach(o=>o.sub=+v))));
     else if(one.kind===2)g.appendChild(field("Item",selectInput("oItem",ITEMS.map(([,n],i)=>[i,n]),one.sub,v=>items.forEach(o=>o.sub=+v))));
-    else if(one.kind===3)g.appendChild(field("Team",numInput("oTeam",one.sub,"1",v=>{pushUndo();items.forEach(o=>o.sub=clamp(v|0,0,7));changed();})));
+    else if(one.kind===3)g.appendChild(field("Team",selectInput("oTeam",TEAMS,clamp(one.sub,-1,7),v=>items.forEach(o=>o.sub=+v))));
     else g.appendChild(field("Index",numInput("oIdx",one.sub,"1",v=>{pushUndo();items.forEach(o=>o.sub=v|0);changed();})));
     {const fw=document.createElement("div");fw.className="unit";let undone=false;
       const fn=numInput("oFace",one.facing,"15",v=>{pushUndo();items.forEach(o=>o.facing=((Math.round(v)%360)+360)%360);changed();});
@@ -1558,6 +1566,8 @@ function renderPane(){
     g.appendChild(field("Y",numInput("oY",(one.y/WU).toFixed(3),"0.125",v=>{pushUndo();one.y=Math.round(v*WU);changed();}),"WU"));
     p.appendChild(g);
     if(one.kind===0){const g2=group("Monster flags");g2.appendChild(checks(MON_FLAGS,one.flags,v=>items.forEach(o=>o.flags=v),"oF"));p.appendChild(g2);}
+    if(one.kind===2){const g2=group("Item flags");g2.appendChild(checks(ITEM_FLAGS,one.flags,v=>items.forEach(o=>o.flags=v),"oIF"));p.appendChild(g2);}
+    if(one.kind===3){const n3=document.createElement("p");n3.className="note";n3.textContent="In team games each team starts at its colour's starts; a team with none uses any start. Random starts are used in games without teams. Network setup (Level tab, Ctrl+I) lists them all.";p.appendChild(n3);}
     const g3=group();g3.appendChild(button("Delete",()=>deleteSelection(false)));p.appendChild(g3);
   } else if(sel.kind==="note"){
     const li=labelInfo(one.text);
@@ -1608,7 +1618,7 @@ function renderLevel(p){
   {const gs=group("Spawning and lights");const sn=document.createElement("p");sn.className="note";
     const pl=doc.placement;const setUp=pl?[...pl.items,...pl.monsters].filter(r=>r.some((v,k)=>k!==1&&v)).length:0;const nL=(doc.lights||[]).length;
     sn.textContent=`${setUp?setUp+" item or monster type"+(setUp>1?"s":"")+" set to respawn or appear at random.":"Items and monsters appear only where you place them."} ${nL?nL+" light"+(nL>1?"s":"")+" in the light table.":"Only simple light levels so far."}`;gs.appendChild(sn);
-    const r=document.createElement("div");r.className="row";r.appendChild(button("Item spawning…",()=>openSpawnTable("items")));r.appendChild(button("Monster spawning…",()=>openSpawnTable("monsters")));r.appendChild(button("Lights…",()=>openLightTable()));gs.appendChild(r);p.appendChild(gs);}
+    const r=document.createElement("div");r.className="row";r.appendChild(button("Network setup…",()=>openSpawnTable("items")));r.appendChild(button("Player starts…",()=>openSpawnTable("players")));r.appendChild(button("Lights…",()=>openLightTable()));gs.appendChild(r);p.appendChild(gs);}
   extractionSection(p);
   levelExtras(p);
   const g5=group("About export");const n=document.createElement("p");n.className="note";
@@ -2003,7 +2013,7 @@ const fmtMB=n=>(n/1048576).toFixed(1)+" MB";
 function openShapesDialog(first){
   const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="12px";
   const intro=document.createElement("p");intro.className="note";intro.style.fontSize="13px";
-  intro.textContent=(first?"Welcome. ":"")+"Load the Shapes file for each game you make maps for, and walls, floors and ceilings show the game's real textures in the 2D map, the texture picker and the 3D view. Files stay in this browser; nothing is uploaded.";
+  intro.textContent=(first?"Welcome. ":"")+"Load the Shapes file for each game you make maps for, and walls, floors and ceilings show the game's real textures in the 2D map, the texture picker and the visual view. Files stay in this browser; nothing is uploaded.";
   body.appendChild(intro);
   const where=document.createElement("p");where.className="note";
   where.innerHTML="Look in each game's data folder from the free Aleph One downloads: <b>Shapes.shpA</b> for Durandal and Infinity, <b>Shapes</b> for Marathon. Original Mac files work too, including MacBinary (.bin) and AppleSingle copies.";
@@ -2201,13 +2211,14 @@ function openSurfaceDialog(s,onDone){
   openModal("Surface settings",body,[button("Cancel",()=>{closeModal();onDone&&onDone();}),button("Apply",()=>commit(true),"primary")]);
 }
 let paintTex=5;let view3d=null;let paletteShown=true;let paintLight=100;const paintApply={tex:true,light:false};
-function open3D(){
+let paintXfer=null; // transfer mode painted with the texture; null keeps the surface's own
+function open3D(at={}){
   if(view3d)return;
   if(typeof THREE==="undefined"){toast("The 3D library didn't load. Check your connection and reload.");return;}
   if(!doc.polys.length){toast("Draw or generate a level first.");return;}
   chain=[];
   const wrap=document.createElement("div");wrap.className="view3d";
-  wrap.innerHTML=`<div class="hud"><span class="t">3D</span>
+  wrap.innerHTML=`<div class="hud"><span class="t">Visual view</span>
     <button class="btn" id="h3mouse" title="Lock the mouse to look around (M). Or hold the right mouse button.">Mouse look</button><button class="btn" id="h3fly" title="Fly through walls (F)">Fly</button><button class="btn" id="h3doors" title="Doors and lifts work as in the game (E uses them), or hold them all open to look around (O)">Doors: working</button><button class="btn" id="h3palbtn" title="Show or hide the texture palette (P)">Palette</button>
     <button class="btn" id="h3start">Back to start</button><button class="btn" id="h3shapes" hidden>Load Shapes…</button>
     <span style="flex:1"></span><span id="h3pos"></span><button class="btn" id="h3close">Close</button>
@@ -2217,7 +2228,7 @@ function open3D(){
   <div id="h3flash" style="position:absolute;inset:0;background:#fff;opacity:0;pointer-events:none;transition:opacity .25s;z-index:5"></div>
   <div class="paintbar" id="h3bar">
     <div class="paintinfo"><span id="h3aim">Aim at a surface</span><span class="paintkeys">Click or Space paints · Shift+click through an opening paints its see-through texture (windows, grates), Shift+drag slides it, Shift+Ctrl+click or Delete clears it · Shift+Space paints the whole room · mouse wheel or [ ] picks the texture · drag a surface to slide its texture (everything touching with the same texture moves and lines up; Ctrl moves one piece) · Caps Lock + drag a floor or ceiling raises or lowers it · G or Alt-click picks up · right-click edits the surface · J L I K shift the texture · + − light · [ ] change texture · Ctrl+Z undo</span>
-      <span class="paintopts"><label>Set <select id="h3set"></select></label><label><input type="checkbox" id="h3applyTex"> Apply texture</label><label><input type="checkbox" id="h3applyLight"> Apply light</label><label>Light <input type="number" id="h3light" min="0" max="100" step="5"> %</label></span></div>
+      <span class="paintopts"><label>Set <select id="h3set"></select></label><label><input type="checkbox" id="h3applyTex"> Apply texture</label><label>Mode <select id="h3xfer"></select></label><label><input type="checkbox" id="h3applyLight"> Apply light</label><label>Light <input type="number" id="h3light" min="0" max="100" step="5"> %</label></span></div>
     <div class="palette" id="h3pal"></div></div>
   <div class="pad" id="h3pad"><button data-a="paint" aria-label="Paint">Paint</button><button data-k="f" aria-label="Forward">▲</button><button data-a="edit" aria-label="Edit surface">Edit</button><button data-k="l" aria-label="Turn left">◀</button><button data-k="b" aria-label="Back">▼</button><button data-k="r" aria-label="Turn right">▶</button></div>`;
   document.body.appendChild(wrap);
@@ -2408,10 +2419,12 @@ function open3D(){
     draw(tree);renderer.clippingPlanes=[];
     if(hl.visible){passScene.add(hl);renderer.render(passScene,camera);scene.add(hl);}
     renderer.autoClear=true;}
-  const start=doc.objs.find(o=>o.kind===3&&objPoly(o))||(()=>{const c=centroid(doc.polys[0].verts);return {x:c.x,y:c.y,facing:0};})();
+  // Visual view starts at the first player start, or standing in a given polygon (the inspector's "Visual view here")
+  const start=at.poly&&doc.polys.includes(at.poly)?(()=>{const c=centroid(at.poly.verts);const facing=(doc.objs.find(o=>o.kind===3)||{}).facing||0;return {x:c.x,y:c.y,facing,q:at.poly};})()
+    :doc.objs.find(o=>o.kind===3&&objPoly(o))||(()=>{const c=centroid(doc.polys[0].verts);return {x:c.x,y:c.y,facing:0};})();
   const st={x:0,y:0,feet:0,yaw:0,pitch:0,vy:0};let fly=false;
   let curPoly=null;
-  function reset(){st.x=start.x;st.y=start.y;const q=start.kind===3?objPoly(start):polyAtPoint(start);curPoly=q;st.feet=q?q.floor:0;st.yaw=(start.facing||0)*Math.PI/180;st.pitch=0;st.vy=0;}
+  function reset(){st.x=start.x;st.y=start.y;const q=start.q||(start.kind===3?objPoly(start):polyAtPoint(start));curPoly=q;st.feet=q?q.floor:0;st.yaw=(start.facing||0)*Math.PI/180;st.pitch=0;st.vy=0;}
   reset();
   // Walking keeps track of the polygon you're in by the edges you cross, as the game does, not by position:
   // where polygons overlap (bridges, stacked rooms) the same spot is in both, and only the edges tell them apart.
@@ -2436,7 +2449,7 @@ function open3D(){
         teleporting=true;flashEl.style.opacity="0.85";
         setTimeout(()=>{const c=centroid(t.verts);st.x=c.x;st.y=c.y;st.feet=hNow(t).floor;st.vy=0;curPoly=t;flashEl.style.opacity="0";
           setTimeout(()=>teleporting=false,300);},250);}
-      else say(`Teleporter to level ${-1-q.perm} (other levels aren't followed in 3D)`);}
+      else say(`Teleporter to level ${-1-q.perm} (other levels aren't followed in the visual view)`);}
     if(q.type===18)say("Automatic exit: the level ends here in the game");}
   // E: use what's in front of you, like the action key in the game. The aimed surface wins; otherwise the nearest
   // switch, then door or lift edge, within reach and roughly ahead (small recessed switches are hard to aim at exactly)
@@ -2455,14 +2468,16 @@ function open3D(){
     if(side){const pn=sideGet(side[0],side[1]).panel;const key=panelKeyOf(pn.type);
       if(key==="platform"){const t=plats.get(doc.polys[pn.perm]);if(t){platToggle(t);say(`Switch: platform ${pn.perm} ${t.active?"started":"stopped"}`);}else say(`This switch points at polygon ${pn.perm}, which isn't a door or lift`);return;}
       if(key==="tag"){const ts=[...plats.values()].filter(p=>p.tag===pn.perm&&pn.perm);ts.forEach(platToggle);say(ts.length?`Tag switch ${pn.perm}: ${ts.length} platform${ts.length>1?"s":""}`:`Tag switch ${pn.perm}: no platform uses this tag`);return;}
-      if(key==="terminal"){say(`Terminal ${pn.perm} (terminals aren't shown in 3D yet)`);return;}
-      if(key==="light"){say(`Light switch: light ${pn.perm} (lights don't change in 3D yet)`);return;}
+      if(key==="terminal"){say(`Terminal ${pn.perm} (terminals aren't shown in the visual view yet)`);return;}
+      if(key==="light"){say(`Light switch: light ${pn.perm} (lights don't change in the visual view yet)`);return;}
       const pl=panelList(doc.info.env).find(x=>x.type===pn.type);say(pl?pl.label:"Control panel");return;}
     if(plat){usePlat(plat);return;}
     const hq=here();const p=hq&&plats.get(hq);if(p){usePlat(p);return;}
     say("Nothing to use here");}
   function usePlat(p){if(!has(p,13)){say("This only moves from a switch or trigger");return;}if(has(p,24)){say("It's locked");return;}
-    if(p.active){p.ext=!p.ext;p.wait=0;}else platActivate(p);}
+    // open and waiting: E shuts it now (it used to flip the direction back to "open" and just restart the wait)
+    if(p.active){if(p.wait>0){p.wait=0;say(p.ext?"Closing":"Opening");}else{p.ext=!p.ext;say(p.ext?"Closing":"Opening");}}
+    else{const r=p.r,atOpen=p.floor===r.minF&&p.ceil===r.maxC;if(atOpen&&p.ext===false)p.ext=true;platActivate(p);}}
   const keys=new Set();const EYE=0.66*WU,BODY=0.8*WU,STEP=0.3*WU;
   let mvPoly=null; // the polygon the last allowed move ends in
   function canMove(nx,ny){
@@ -2474,25 +2489,31 @@ function open3D(){
   const pal=wrap.querySelector("#h3pal");let paintCol=null; // null paints the wall set; a landscape collection paints sky
   const texCk=wrap.querySelector("#h3applyTex"),lightCk=wrap.querySelector("#h3applyLight"),lightIn=wrap.querySelector("#h3light");
   texCk.checked=paintApply.tex;lightCk.checked=paintApply.light;lightIn.value=paintLight;
-  // hand the keyboard back to the 3D view after each change, so Space paints again
+  const xferSel=wrap.querySelector("#h3xfer");xferSel.innerHTML=[["","Keep"],...XFERS.filter(([v])=>v!==XFER_LANDSCAPE)].map(([v,l])=>`<option value="${v}">${l}</option>`).join("");
+  const showXfer=()=>{xferSel.value=paintXfer==null?"":String(paintXfer);};showXfer();
+  // hand the keyboard back to the visual view after each change, so Space paints again
+  texCk.onchange=()=>{paintApply.tex=texCk.checked;texCk.blur();};lightCk.onchange=()=>{paintApply.light=lightCk.checked;lightCk.blur();};
+  lightIn.onchange=()=>{paintLight=clamp(Math.round(parseFloat(lightIn.value)||0),0,100);lightIn.value=paintLight;lightIn.blur();};
+  xferSel.onchange=()=>{paintXfer=xferSel.value===""?null:+xferSel.value;xferSel.blur();};
   // the Set menu picks which texture set the palette shows: the level's own (null), any other wall set, or the sky
   const setSel=wrap.querySelector("#h3set");
   function renderSets(){const sets=texSets(true);if(!sets.some(x=>x.col===paintCol))paintCol=null;setSel.innerHTML="";
     for(const x of sets){const o=document.createElement("option");o.value=x.col==null?"":String(x.col);o.textContent=x.name;setSel.appendChild(o);}setSel.value=paintCol==null?"":String(paintCol);}
   setSel.onchange=()=>{paintCol=setSel.value===""?null:+setSel.value;paintTex=0;renderPalette();setSel.blur();};
   function renderPalette(){renderSets();pal.innerHTML="";const n=texCountFor(paintCol),sky=isLandCol(paintCol);paintTex=clamp(paintTex,0,Math.max(0,n-1));
-    for(let i=0;i<n;i++){const b=document.createElement("button");b.className="texbtn"+(sky?" sky":"")+(i===paintTex?" on":"");b.title=sky?`Landscape ${i} (sky)`:`Texture ${i}`;b.appendChild(thumb(i,52,paintCol??undefined));const t=document.createElement("span");t.textContent=sky?`sky ${i}`:i;b.appendChild(t);b.onclick=()=>{paintTex=i;renderPalette();};pal.appendChild(b);}
+    for(let i=0;i<n;i++){const b=document.createElement("button");b.className="texbtn"+(sky?" sky":"")+(i===paintTex?" on":"");b.title=sky?`Landscape ${i} (sky)`:`Texture ${i}`;b.appendChild(thumb(i,52,paintCol??undefined));const t=document.createElement("span");t.textContent=sky?`sky ${i}`:i;b.appendChild(t);b.onclick=()=>{paintTex=i;paintXfer=null;showXfer();renderPalette();};pal.appendChild(b);}
     const on=pal.querySelector(".on");if(on)on.scrollIntoView({block:"nearest",inline:"nearest"});}
-  function texOfSurf(s){if(s.kind==="floor")return {b:s.poly.ftex,col:s.poly.fcol,ox:s.poly.fox,oy:s.poly.foy,light:s.poly.flight};if(s.kind==="ceil")return {b:s.poly.ctex,col:s.poly.ccol,ox:s.poly.cox,oy:s.poly.coy,light:s.poly.clight};if(s.part==="trans")return (sideGet(s.a,s.b)||{}).trans||{b:0};return wallTex(s.poly,s.a,s.b,s.part);}
+  function texOfSurf(s){if(s.kind==="floor")return {b:s.poly.ftex,col:s.poly.fcol,ox:s.poly.fox,oy:s.poly.foy,light:s.poly.flight,xfer:s.poly.fxfer||0};if(s.kind==="ceil")return {b:s.poly.ctex,col:s.poly.ccol,ox:s.poly.cox,oy:s.poly.coy,light:s.poly.clight,xfer:s.poly.cxfer||0};if(s.part==="trans")return (sideGet(s.a,s.b)||{}).trans||{b:0};return wallTex(s.poly,s.a,s.b,s.part);}
   const partName={full:"Wall",upper:"Upper wall",lower:"Lower wall",trans:"See-through texture"};
   function describe(s){if(!s)return "Aim at a surface";const t=texOfSurf(s);const where=s.kind==="floor"?"Floor":s.kind==="ceil"?"Ceiling":partName[s.part];
     const pn=s.kind==="wall"&&(sideGet(s.a,s.b)||{}).panel;const pl=pn?panelList(doc.info.env).find(p=>p.type===pn.type):null;
     return `${where} · polygon ${doc.polys.indexOf(s.poly)} · ${isLandCol(t.col)?"landscape":(ownCol(t.col)!=null?setName(t.col):"")+"texture"} ${t.b} · height ${s.kind==="floor"?fmt(s.poly.floor):s.kind==="ceil"?fmt(s.poly.ceil):"–"} · offset ${((t.ox||0)/WU).toFixed(3)}, ${((t.oy||0)/WU).toFixed(3)} · light ${t.light??s.poly.light}%${pl?" · "+pl.label:""}`;}
   // the texture keeps its set (collection; null = the level's own). A sky texture also sets the Landscape mode; anything else takes it off
-  function applyTex(s,b,col=paintCol){col=ownCol(col);const sky=isLandCol(col),q=s.poly;
-    if(s.kind==="floor"){q.ftex=b;delete q.fclut;if(col!=null)q.fcol=col;else delete q.fcol;if(sky)q.fxfer=XFER_LANDSCAPE;else if(q.fxfer===XFER_LANDSCAPE)q.fxfer=0;}
-    else if(s.kind==="ceil"){q.ctex=b;delete q.cclut;if(col!=null)q.ccol=col;else delete q.ccol;if(sky)q.cxfer=XFER_LANDSCAPE;else if(q.cxfer===XFER_LANDSCAPE)q.cxfer=0;}
-    else{const cur=(sideGet(s.a,s.b)||{})[s.part];const t={...(cur||{ox:0,oy:0}),b};delete t.col;delete t.clut;if(col!=null)t.col=col;if(sky)t.xfer=XFER_LANDSCAPE;else if(t.xfer===XFER_LANDSCAPE)delete t.xfer;sideSet(s.a,s.b,s.part,t);}}
+  function applyTex(s,b,col=paintCol,xfer=paintXfer){col=ownCol(col);const sky=isLandCol(col),q=s.poly;const xf=sky?XFER_LANDSCAPE:xfer;
+    if(s.kind==="floor"){q.ftex=b;delete q.fclut;if(col!=null)q.fcol=col;else delete q.fcol;if(xf!=null)q.fxfer=xf;else if(q.fxfer===XFER_LANDSCAPE)q.fxfer=0;}
+    else if(s.kind==="ceil"){q.ctex=b;delete q.cclut;if(col!=null)q.ccol=col;else delete q.ccol;if(xf!=null)q.cxfer=xf;else if(q.cxfer===XFER_LANDSCAPE)q.cxfer=0;}
+    else{const cur=(sideGet(s.a,s.b)||{})[s.part];const t={...(cur||{ox:0,oy:0}),b};delete t.col;delete t.clut;if(col!=null)t.col=col;
+      if(xf!=null){if(xf)t.xfer=xf;else delete t.xfer;}else if(t.xfer===XFER_LANDSCAPE)delete t.xfer;sideSet(s.a,s.b,s.part,t);}}
   function refresh(){dirty=true;initPlats(true);build();updateAim();lastAim=undefined;}
   function applyLight(s,v){const q=s.poly;
     if(s.kind==="floor"){if(v===q.light&&q.clight==null&&q.fli==null)delete q.flight;else q.flight=v;delete q.fli;}
@@ -2548,7 +2569,9 @@ function open3D(){
     const rx=-Math.sin(st.yaw),ry=Math.cos(st.yaw),wx=o.b.x-o.a.x,wy=o.b.y-o.a.y,wl=Math.hypot(wx,wy)||1;
     return {sf:{kind:"wall",poly:o.q,a:o.a,b:o.b,part:"trans"},wpp:2*o.dist*Math.tan(camera.fov*Math.PI/360)/cv.clientHeight*WU,shift:true,moved:0,undo:false,sx:e.clientX,sy:e.clientY,yaw:st.yaw,
       opening:pos||{center:true},ox0:t?t.ox||0:(ft?-(ft.ox||0):0),oy0:t?t.oy||0:(ft?ft.oy||0:0),along:Math.sign((wx*rx+wy*ry)/wl)||1,far:ft?{ox0:ft.ox||0,oy0:ft.oy||0}:null,noNear:!t,noTex:!t&&!ft};}
-  function grab(){if(!aim)return;const t=texOfSurf(aim);paintTex=t.b;paintCol=ownCol(t.col);paintLight=t.light??aim.poly.light;renderPalette();lightIn.value=paintLight;status(`Picked up ${isLandCol(paintCol)?"landscape":(paintCol!=null?setName(paintCol):"")+"texture"} ${paintTex} and light ${paintLight}%.`);}
+  function grab(){if(!aim)return;const t=texOfSurf(aim);paintTex=t.b;paintCol=ownCol(t.col);paintLight=t.light??aim.poly.light;
+    const x=t.xfer||0;paintXfer=x===XFER_LANDSCAPE?null:x;showXfer();paintApply.light=true;lightCk.checked=true;
+    renderPalette();lightIn.value=paintLight;const xn=(XFERS.find(([v])=>v===x)||[,""])[1];say(`Copied: texture ${t.b}${x&&x!==XFER_LANDSCAPE?", "+xn.toLowerCase():""}, light ${paintLight}%`);status(`Picked up ${isLandCol(paintCol)?"landscape":(paintCol!=null?setName(paintCol):"")+"texture"} ${paintTex} and light ${paintLight}%.`);}
   function nudge(dx,dy){if(!aim)return;const s=aim;pushUndo();
     if(s.kind==="floor"){s.poly.fox=(s.poly.fox||0)+dx;s.poly.foy=(s.poly.foy||0)+dy;}
     else if(s.kind==="ceil"){s.poly.cox=(s.poly.cox||0)+dx;s.poly.coy=(s.poly.coy||0)+dy;}
@@ -2556,6 +2579,48 @@ function open3D(){
     refresh();}
   function editSurface(){if(!aim)return;try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}keys.clear();
     openSurfaceDialog(aim,()=>{refresh();});}
+  // Right-click menu: the surface's settings as a drop-down at the mouse (Transfer mode, Light and Control panel open to the side)
+  let ctx=null;
+  function closeMenu(){if(ctx){ctx.remove();ctx=null;}}
+  function setXfer(s,v){pushUndo();const q=s.poly;if(s.kind==="floor")q.fxfer=v;else if(s.kind==="ceil")q.cxfer=v;else{const t={...texOfSurf(s)};if(v)t.xfer=v;else delete t.xfer;sideSet(s.a,s.b,s.part,t);}refresh();}
+  function setOwnLight(s,v){pushUndo();const q=s.poly;
+    if(v!=null)applyLight(s,v);
+    else if(s.kind==="floor"){delete q.flight;delete q.fli;}else if(s.kind==="ceil"){delete q.clight;delete q.cli;}
+    else{const t={...texOfSurf(s)};delete t.light;delete t.li;sideSet(s.a,s.b,s.part,t);}refresh();}
+  function setPanel(s,type){pushUndo();const rec={...(sideGet(s.a,s.b)||{})};
+    if(type==null)delete rec.panel;else{const def=panelList(doc.info.env).find(p=>p.type===type);const was=rec.panel&&rec.panel.type===type;
+      rec.panel=was?rec.panel:{type,perm:0,flags:1};if(!was)rec[s.part]={...(rec[s.part]||texOfSurf(s)),b:def.tex};}
+    doc.sides.set(sideKey(s.a,s.b),rec);refresh();}
+  function surfaceMenu(s,x,y){closeMenu();if(!s)return;try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}keys.clear();
+    const t=texOfSurf(s),q=s.poly,isWall=s.kind==="wall",curX=t.xfer||0,own=t.light;
+    const m=document.createElement("div");m.className="ctxmenu";m.id="h3ctx";
+    const head=document.createElement("div");head.className="ctxhead";head.textContent=`${s.kind==="floor"?"Floor":s.kind==="ceil"?"Ceiling":partName[s.part]} · polygon ${doc.polys.indexOf(q)}`;m.appendChild(head);
+    const item=(label,fn,o={})=>{const b=document.createElement("button");b.type="button";b.className="ctxitem"+(o.sub?" hassub":"")+(o.on?" on":"");b.textContent=label;if(o.key){const k=document.createElement("kbd");k.textContent=o.key;b.appendChild(k);}
+      if(o.sub){const sm=document.createElement("div");sm.className="ctxsub";o.sub.forEach(([l,f,on])=>sm.appendChild(item(l,f,{on})));b.appendChild(sm);
+        b.onclick=e=>{if(e.target===b){m.querySelectorAll(".ctxitem.open").forEach(x=>x!==b&&x.classList.remove("open"));b.classList.toggle("open");}};}
+      else b.onclick=e=>{e.stopPropagation();closeMenu();fn();};return b;};
+    const sep=()=>{const d=document.createElement("div");d.className="ctxsep";m.appendChild(d);};
+    m.appendChild(item("Copy texture, mode and light",()=>{aim=s;grab();},{key:"G"}));
+    m.appendChild(item("Paste here",()=>{aim=s;paint(false);},{key:"Click"}));
+    sep();
+    m.appendChild(item("Texture…",()=>{openTexturePicker("Texture",{b:t.b,col:t.col},(v,c)=>{pushUndo();applyTex(s,v,c,null);refresh();},true);}));
+    m.appendChild(item(`Transfer mode: ${(XFERS.find(([v])=>v===curX)||[,"Normal"])[1]}`,null,{sub:XFERS.filter(([v])=>v!==XFER_LANDSCAPE||curX===XFER_LANDSCAPE).map(([v,l])=>[l,()=>setXfer(s,v),v===curX])}));
+    const lights=[[`Room light (${q.light}%)`,()=>setOwnLight(s,null),own==null]];for(let v=100;v>=0;v-=10)lights.push([`${v}%`,()=>setOwnLight(s,v),own===v]);
+    if(own!=null&&own%10)lights.splice(1,0,[`${own}% (now)`,()=>{},true]);
+    m.appendChild(item(`Light: ${own!=null?own+"%":"room ("+q.light+"%)"}`,null,{sub:lights}));
+    if(isWall&&s.part!=="trans"){const pn=(sideGet(s.a,s.b)||{}).panel;const list=panelList(doc.info.env);
+      m.appendChild(item(`Control panel: ${pn?(list.find(p=>p.type===pn.type)||{label:"?"}).label:"none"}`,null,{sub:[["None",()=>setPanel(s,null),!pn],...list.map(p=>[p.label,()=>setPanel(s,p.type),!!pn&&pn.type===p.type])]}));}
+    if(isWall&&hasTrans({a:s.a,b:s.b}))m.appendChild(item("Clear see-through texture",()=>clearLine(s.a,s.b),{key:"Del"}));
+    sep();
+    m.appendChild(item("All settings…",()=>{aim=s;editSurface();}));
+    wrap.appendChild(m);
+    const W=wrap.clientWidth,H=wrap.clientHeight,r=m.getBoundingClientRect();
+    m.style.left=Math.max(4,Math.min(x,W-r.width-4))+"px";m.style.top=Math.max(4,Math.min(y,H-r.height-4))+"px";
+    if(x>W-2*r.width-8)m.classList.add("left");
+    ctx=m;}
+  // the browser's own right-click menu never shows while the visual view is open (it used to pop up over the settings)
+  const noCtx=e=>{e.preventDefault();};document.addEventListener("contextmenu",noCtx,true);
+  const outside=e=>{if(ctx&&!ctx.contains(e.target))closeMenu();};document.addEventListener("pointerdown",outside,true);
   let dirty=false,lastAim;
   // landing after flying: where polygons overlap, take the one whose floor is just under your feet
   function landPoly(){const qs=doc.polys.filter(q=>pointInPoly(st,q.verts));if(!qs.length)return null;
@@ -2576,7 +2641,7 @@ function open3D(){
   window.addEventListener("forge-shapes",onShapes);
   const onKey=e=>{if(!$("modal").hidden)return;if(e.target&&e.target.tagName==="INPUT"&&e.key!=="Escape")return;const k=e.key.toLowerCase();
     if((e.ctrlKey||e.metaKey)&&k==="z"){e.preventDefault();e.shiftKey?redo():undo();refresh();return;}
-    if(k==="escape"){if(document.pointerLockElement)return;close();return;}
+    if(k==="escape"){if(ctx){closeMenu();return;}if(document.pointerLockElement)return;close();return;}
     if(k===" "){e.preventDefault();if(!e.repeat){if(e.shiftKey&&paletteShown){const o=openingAt(null),h=surfAt();if(o&&(!h||o.dist<=h.dist+0.02)){paintOpening(null);return;}}paint(e.shiftKey);}return;}
     if(k==="m"){lockMouse(document.pointerLockElement!==cv);return;}
     if(k==="f"){setFly(!fly);return;}if(k==="p"||k==="tab"){e.preventDefault();setPalette(!paletteShown);return;}
@@ -2647,7 +2712,7 @@ function open3D(){
     status(`${isLandCol(paintCol)?"Sky":"Texture"} ${paintTex}${paintCol!=null&&!isLandCol(paintCol)?" ("+setName(paintCol).trim()+")":""}`);},{passive:false});
   cv.addEventListener("pointerdown",e=>{
     const locked=document.pointerLockElement===cv;
-    if(e.button===2){if(locked){updateAim();editSurface();return;}
+    if(e.button===2){if(locked){updateAim();const b=wrap.getBoundingClientRect();surfaceMenu(aim,b.width/2,b.height/2);return;}
       rlook={x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,ev:e};cv.setPointerCapture(e.pointerId);return;}
     if(e.button===0&&e.altKey){updateAim();grab();return;}
     if(e.button===0&&e.shiftKey&&paletteShown){const ev=locked?null:e;const h=surfAt(ev);const near=o=>o&&(!h||o.dist<=h.dist+0.02);
@@ -2662,7 +2727,7 @@ function open3D(){
     if(document.pointerLockElement===cv){st.yaw+=e.movementX*0.0025;st.pitch=clamp(st.pitch-e.movementY*0.0025,-1.3,1.3);return;}
     if(!look)return;st.yaw+=(e.clientX-look.x)*0.005;st.pitch=clamp(st.pitch-(e.clientY-look.y)*0.005,-1.3,1.3);look.x=e.clientX;look.y=e.clientY;});
   cv.addEventListener("pointerup",e=>{if(rlook&&e.button===2){const r=rlook;rlook=null;
-      if(Math.hypot(e.clientX-r.sx,e.clientY-r.sy)<6){const hit=surfAt(e);if(hit){aim=hit.sf;editSurface();}}return;}
+      if(Math.hypot(e.clientX-r.sx,e.clientY-r.sy)<6){const hit=surfAt(e);if(hit){aim=hit.sf;const b=wrap.getBoundingClientRect();surfaceMenu(hit.sf,e.clientX-b.left,e.clientY-b.top);}}return;}
     if(drag){const d=drag;drag=null;endDrag(d);return;}const l=look;look=null;if(!l)return;
     if(Math.hypot(e.clientX-l.sx,e.clientY-l.sy)<6&&!l.touch&&cv.requestPointerLock){try{const r=cv.requestPointerLock();if(r&&r.catch)r.catch(()=>{});}catch(_){}}});
   const pad=wrap.querySelector("#h3pad");const padKeys={f:"w",b:"s",l:"arrowleft",r:"arrowright"};
@@ -2700,11 +2765,11 @@ function open3D(){
     const q=here();posEl.textContent=`x ${(st.x/WU).toFixed(2)} y ${(st.y/WU).toFixed(2)} · ${q?"polygon "+doc.polys.indexOf(q):"outside"}`;
     raf=requestAnimationFrame(frame);}
   raf=requestAnimationFrame(frame);
-  function close(){cancelAnimationFrame(raf);document.removeEventListener("pointerlockchange",showMouseMode);document.removeEventListener("keydown",onKey,true);document.removeEventListener("keyup",offKey);window.removeEventListener("resize",size);window.removeEventListener("forge-shapes",onShapes);
+  function close(){cancelAnimationFrame(raf);closeMenu();document.removeEventListener("contextmenu",noCtx,true);document.removeEventListener("pointerdown",outside,true);document.removeEventListener("pointerlockchange",showMouseMode);document.removeEventListener("keydown",onKey,true);document.removeEventListener("keyup",offKey);window.removeEventListener("resize",size);window.removeEventListener("forge-shapes",onShapes);
     try{if(document.pointerLockElement)document.exitPointerLock();}catch(_){}
     for(const g of groupOf.values())dropGroup(g);
-    disposables.forEach(d=>d.dispose&&d.dispose());renderer.dispose();wrap.remove();view3d=null;if(dirty){changed();status("Surfaces painted in 3D. Export to see them in Aleph One.");}}
-  view3d={close,build:refresh,test:{plats:()=>plats,groups:()=>groupOf,openingAt,paintOpening,st,action,keys,surfAt,setPoly:q=>{curPoly=q;},enter:q=>{curPoly=q;entered(q);},tree:()=>{const r=here();return r?portalTree(r):null;},setYaw:v=>{st.yaw=v;st.pitch=0;},meshes:()=>meshes,curPoly:()=>curPoly}}; // test is for the headless tests
+    disposables.forEach(d=>d.dispose&&d.dispose());renderer.dispose();wrap.remove();view3d=null;if(dirty){changed();status("Surfaces painted in the visual view. Export to see them in Aleph One.");}}
+  view3d={close,build:refresh,test:{plats:()=>plats,groups:()=>groupOf,openingAt,paintOpening,st,action,keys,surfAt,setPoly:q=>{curPoly=q;},enter:q=>{curPoly=q;entered(q);},tree:()=>{const r=here();return r?portalTree(r):null;},setYaw:v=>{st.yaw=v;st.pitch=0;},meshes:()=>meshes,curPoly:()=>curPoly,surfaceMenu,grab,paint,setAim:v=>{aim=v;},get aim(){return aim;},usePlat:q=>usePlat(plats.get(q))}}; // test is for the headless tests
 }
 
 // =============================================================== scenario: several levels, pictures, physics
@@ -3680,42 +3745,89 @@ function dialInput(id,deg,onchange){
 
 // ---- spawn table (Forge's Item Parameters and Monster Parameters) ----
 // Each row: [flags, initial, minimum, maximum, random count (-1 = unlimited), random chance (0–65535)]. Flag 1 = reappears at random spots.
+// Network setup, like Forge's Set Item Parameters / Set Monster Parameters (Special menu) plus the player starts:
+// pick a type, then set how many start, the min and max kept on the level, the total that can appear, the chance and
+// whether they reappear at random. Rows are the level's spawn table (plac chunk): flags, initial, min, max, total, chance.
 function openSpawnTable(which="items"){
+  if(which==="players"){openPlayerStarts();return;}
   const isItems=which==="items";const names=isItems?ITEMS:MONSTERS;const kind=isItems?2:0;
   if(!doc.placement)doc.placement={items:Array.from({length:64},()=>[0,0,0,0,0,0]),monsters:Array.from({length:64},()=>[0,0,0,0,0,0])};
   const work=doc.placement[which].map(r=>[...r]);
   const placed=new Array(64).fill(0);for(const o of doc.objs)if(o.kind===kind&&o.sub>=0&&o.sub<64&&polyAtPoint(o))placed[o.sub]++;
   const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="8px";
-  const tabs=document.createElement("div");tabs.className="viewmodes";for(const [k,l] of [["items","Items"],["monsters","Monsters"]]){const b=document.createElement("button");b.textContent=l;b.setAttribute("aria-pressed",k===which);b.onclick=()=>{if(k!==which){save();openSpawnTable(k);}};tabs.appendChild(b);}body.appendChild(tabs);
+  body.appendChild(netTabs(which,()=>save()));
+  // Forge's editor: one type at a time
+  let cur=Math.max(0,names.findIndex((x,i)=>placed[i]||work[i].some((v,k)=>v&&k!==0)));
+  const ed=document.createElement("div");ed.className="neted";body.appendChild(ed);
+  function drawEd(){ed.innerHTML="";const r=work[cur];
+    const top=document.createElement("div");top.className="row";top.style.alignItems="center";top.style.gap="10px";
+    const ts=sel_("spType",names.map(([,l],i)=>[String(i),l]),String(cur),v=>{cur=+v;drawEd();});top.appendChild(field("Type",ts));
+    const loc=document.createElement("span");loc.className="note";loc.textContent=`${placed[cur]} starting location${placed[cur]===1?"":"s"} for this ${isItems?"item":"monster"} on this level`;top.appendChild(loc);ed.appendChild(top);
+    const grid=document.createElement("div");grid.className="netgrid";
+    const num=(label,k,max,id,hint)=>{const inp=document.createElement("input");inp.type="number";inp.min=0;inp.max=max;inp.id=id;inp.value=k===1?Math.max(r[1],placed[cur]):r[k];
+      inp.onchange=()=>{let v=clamp(parseInt(inp.value)||0,0,max);if(k===1){r[1]=v;if(v>placed[cur])r[0]|=1;}else r[k]=v;draw();drawEd();};const f=field(label,inp);if(hint)f.title=hint;grid.appendChild(f);};
+    num("Initial count",1,255,"spIni","How many there are when the level starts, counting the ones placed (extras go to random spots)");
+    num("Min count",2,255,"spMin","The game tops this type back up to at least this many");
+    num("Max count",3,255,"spMax","Never more than this many at once");
+    const tw=document.createElement("div");tw.className="unit";const tot=document.createElement("input");tot.type="number";tot.min=0;tot.max=32767;tot.id="spTot";tot.value=r[4]<0?"":r[4];tot.disabled=r[4]<0;
+    tot.onchange=()=>{r[4]=clamp(parseInt(tot.value)||0,0,32767);draw();};const il=document.createElement("label");const inf=document.createElement("input");inf.type="checkbox";inf.id="spInf";inf.checked=r[4]<0;
+    inf.onchange=()=>{r[4]=inf.checked?-1:0;draw();drawEd();};il.appendChild(inf);il.append(" ∞ available");tw.appendChild(tot);tw.appendChild(il);const tf=field("Total available",tw);tf.title="How many can appear over the whole game, on top of the starting ones";grid.appendChild(tf);
+    const cw=document.createElement("div");cw.className="unit";const ch=document.createElement("input");ch.type="number";ch.min=0;ch.max=100;ch.id="spCh";ch.value=Math.round((r[5]&0xffff)*100/65535);
+    ch.onchange=()=>{const v=clamp(parseFloat(ch.value)||0,0,100);r[5]=Math.round(v*65535/100);draw();};cw.appendChild(ch);const em=document.createElement("em");em.textContent="%";cw.appendChild(em);const af=field("Appearance",cw);af.title="Chance each time the game checks that one more appears (up to Max)";grid.appendChild(af);
+    const rl=document.createElement("label");rl.className="checks";const rc=document.createElement("input");rc.type="checkbox";rc.id="spRnd";rc.checked=!!(r[0]&1);rc.onchange=()=>{r[0]=rc.checked?r[0]|1:r[0]&~1;draw();};rl.appendChild(rc);rl.append(" Random location");grid.appendChild(rl);
+    ed.appendChild(grid);}
   const n=document.createElement("p");n.className="note";
-  n.innerHTML=`<b>Placed</b> are the ones you put on the map. <b>Start with</b> adds extra ones at random spots when the level begins. While the level runs, the game tops each type back up to <b>Min</b>, and may add more (up to <b>Max</b>) with the <b>Chance</b> each time, until <b>Total</b> extra have appeared (∞ = no limit). <b>Random spots</b> makes them reappear anywhere instead of where they started.`;body.appendChild(n);
+  n.innerHTML=`Pick a type above, or click a row. <b>Initial</b> is how many there are at the start (extras beyond the placed ones go to random spots). While the level runs the game keeps each type between <b>Min</b> and <b>Max</b>, adding one with the <b>Appearance</b> chance, until <b>Total</b> extra have appeared (∞ = no limit). <b>Random location</b> makes them reappear anywhere instead of where they were. Mostly for network games; for monsters the host's "monsters replenish" option has to be on.`;body.appendChild(n);
   const show=document.createElement("label");show.className="checks";const sc=document.createElement("input");sc.type="checkbox";sc.id="spAll";sc.checked=!!opts.spawnAll;show.appendChild(sc);show.append(" Show every type (not just the ones placed or set up)");body.appendChild(show);
   const wrap=document.createElement("div");wrap.className="spawnwrap";body.appendChild(wrap);
   function draw(){wrap.innerHTML="";const t=document.createElement("table");t.className="spawn";
-    t.innerHTML=`<thead><tr><th>${isItems?"Item":"Monster"}</th><th>Placed</th><th>Start with</th><th>Min</th><th>Max</th><th>Total</th><th>Chance</th><th title="Reappear at random spots">Random spots</th></tr></thead>`;
+    t.innerHTML=`<thead><tr><th>${isItems?"Item name":"Monster name"}</th><th>Placed</th><th>Initial count</th><th>Min / Max</th><th>Total available</th><th>Appearance</th><th>Random location</th></tr></thead>`;
     const tb=document.createElement("tbody");
-    names.forEach(([,label],i)=>{const r=work[i];const set=r.some((v,k)=>k!==1&&v)||placed[i]||r[1];if(!set&&!opts.spawnAll)return;
-      const tr=document.createElement("tr");const td=x=>{const c=document.createElement("td");if(typeof x==="string")c.textContent=x;else c.appendChild(x);tr.appendChild(c);return c;};
-      td(label);td(String(placed[i])).className="num";
-      const num=(k,min,max,title)=>{const inp=document.createElement("input");inp.type="number";inp.min=min;inp.max=max;inp.value=r[k];inp.title=title||"";inp.id=`sp${which}${i}_${k}`;inp.onchange=()=>{r[k]=clamp(parseInt(inp.value)||0,min,max);inp.value=r[k];};return inp;};
-      const ini=num(1,0,255,"Total at the start, counting the ones placed (extras go to random spots)");ini.value=Math.max(r[1],placed[i]);ini.onchange=()=>{const v=clamp(parseInt(ini.value)||0,0,255);r[1]=v;if(v>placed[i])r[0]|=1;ini.value=Math.max(v,placed[i]);draw();};td(ini);
-      td(num(2,0,255));td(num(3,0,255));
-      const tw=document.createElement("span");tw.className="inf";const tot=num(4,0,32767);const inf=document.createElement("input");inf.type="checkbox";inf.id=`sp${which}${i}_inf`;inf.title="No limit";inf.checked=r[4]===-1;tot.disabled=inf.checked;if(inf.checked)tot.value="";
-      inf.onchange=()=>{r[4]=inf.checked?-1:0;draw();};tw.appendChild(tot);const il=document.createElement("label");il.appendChild(inf);il.append("∞");tw.appendChild(il);td(tw);
-      const ch=document.createElement("input");ch.type="number";ch.min=0;ch.max=100;ch.id=`sp${which}${i}_ch`;ch.value=Math.round((r[5]&0xffff)*100/65535);ch.onchange=()=>{const p=clamp(parseFloat(ch.value)||0,0,100);r[5]=Math.round(p*65535/100);ch.value=Math.round(p);};
-      const cw=document.createElement("span");cw.className="inf";cw.appendChild(ch);cw.append("%");td(cw);
-      const rnd=document.createElement("input");rnd.type="checkbox";rnd.id=`sp${which}${i}_rnd`;rnd.checked=!!(r[0]&1);rnd.onchange=()=>{r[0]=rnd.checked?r[0]|1:r[0]&~1;};const rc=td(rnd);rc.className="num";
+    names.forEach(([,label],i)=>{const r=work[i];const set=r.some((v,k)=>k!==1&&v)||placed[i]||r[1];if(!set&&!opts.spawnAll&&i!==cur)return;
+      const tr=document.createElement("tr");tr.className="pick"+(i===cur?" on":"");tr.onclick=()=>{cur=i;draw();drawEd();};
+      const td=(x,c)=>{const e=document.createElement("td");e.textContent=x;if(c)e.className=c;tr.appendChild(e);};
+      td(label);td(String(placed[i]),"num");td(String(Math.max(r[1],placed[i])),"num");td(`${r[2]} / ${r[3]}`,"num");td(r[4]<0?"∞":String(r[4]),"num");td(Math.round((r[5]&0xffff)*100/65535)+"%","num");td(r[0]&1?"●":"","num");
       tb.appendChild(tr);});
-    if(!tb.children.length){const tr=document.createElement("tr");const c=document.createElement("td");c.colSpan=8;c.className="note";c.textContent=`No ${isItems?"items":"monsters"} placed yet. Tick “Show every type” to set some up anyway.`;tr.appendChild(c);tb.appendChild(tr);}
     t.appendChild(tb);wrap.appendChild(t);}
   sc.onchange=()=>{opts.spawnAll=sc.checked;draw();};
-  draw();
+  draw();drawEd();
   const quick=document.createElement("div");quick.className="row";
-  quick.appendChild(button(isItems?"Keep placed items stocked (net games)":"Keep monsters coming back",()=>{for(let i=0;i<64;i++)if(placed[i]){const r=work[i];r[2]=Math.max(r[2],placed[i]);r[3]=Math.max(r[3],placed[i]);r[4]=-1;}draw();status("Placed types now respawn up to the number placed. Save to keep it.");}));
-  quick.appendChild(button("Clear all",()=>{for(const r of work)r.splice(0,6,0,0,0,0,0,0);draw();}));
+  quick.appendChild(button(isItems?"Keep placed items stocked (net games)":"Keep monsters coming back",()=>{for(let i=0;i<64;i++)if(placed[i]){const r=work[i];r[2]=Math.max(r[2],placed[i]);r[3]=Math.max(r[3],placed[i]);r[4]=-1;}draw();drawEd();status("Placed types now respawn up to the number placed. Save to keep it.");}));
+  quick.appendChild(button("Clear all",()=>{for(const r of work)r.splice(0,6,0,0,0,0,0,0);draw();drawEd();}));
   body.appendChild(quick);
   function save(){const before=JSON.stringify(doc.placement[which]);if(JSON.stringify(work)===before)return;pushUndo();doc.placement[which]=work.map(r=>[...r]);changed();}
-  openModal(isItems?"Item spawning":"Monster spawning",body,[button("Cancel",closeModal),button("Save",()=>{save();closeModal();status("Spawn table saved.");},"primary")],{wide:true});
+  openModal(isItems?"Network setup: items":"Network setup: monsters",body,[button("Cancel",closeModal),button("Save",()=>{save();closeModal();status("Spawn table saved.");},"primary")],{wide:true});
+}
+function netTabs(which,beforeSwitch){
+  const tabs=document.createElement("div");tabs.className="viewmodes";
+  for(const [k,l] of [["items","Items"],["monsters","Monsters"],["players","Player starts"]]){const b=document.createElement("button");b.textContent=l;b.id="netTab_"+k;b.setAttribute("aria-pressed",k===which);
+    b.onclick=()=>{if(k!==which){beforeSwitch&&beforeSwitch();openSpawnTable(k);}};tabs.appendChild(b);}
+  return tabs;}
+// Player starts for network games: each start's team (or Random), plus the level's game types and hill/base polygons
+function openPlayerStarts(){
+  const starts=doc.objs.filter(o=>o.kind===3);const work=starts.map(o=>({o,sub:clamp(o.sub,-1,7)}));const entry={v:doc.info.entry};
+  const body=document.createElement("div");body.style.display="flex";body.style.flexDirection="column";body.style.gap="10px";
+  body.appendChild(netTabs("players",()=>save()));
+  const g=group("Game types");g.appendChild(checks(GAME_TYPES,entry.v,v=>entry.v=v,"nsGt"));body.appendChild(g);
+  const sum=document.createElement("p");sum.className="note";body.appendChild(sum);
+  const wrap=document.createElement("div");wrap.className="spawnwrap";body.appendChild(wrap);
+  const hills=doc.polys.filter(q=>q.type===3).length,bases=doc.polys.filter(q=>q.type===4).length;
+  function draw(){const per=new Map();for(const w of work)per.set(w.sub,(per.get(w.sub)||0)+1);
+    sum.textContent=`${work.length} player start${work.length===1?"":"s"}${work.length?": "+TEAMS.filter(([t])=>per.get(t)).map(([t,l])=>`${per.get(t)} ${l.replace(" (any team)","").toLowerCase()}`).join(", "):""}. Games for 8 players want at least 8 starts. In team games each team uses its colour's starts (any start if its colour has none); in other games every start is used. ${hills} hill polygon${hills===1?"":"s"} (King of the Hill), ${bases} team base${bases===1?"":"s"}: paint them with the Type view (key 4).`;
+    wrap.innerHTML="";const t=document.createElement("table");t.className="spawn";t.innerHTML="<thead><tr><th>#</th><th>Team</th><th>Where</th><th>Facing</th><th></th></tr></thead>";const tb=document.createElement("tbody");
+    work.forEach((w,i)=>{const tr=document.createElement("tr");const td=x=>{const e=document.createElement("td");if(typeof x==="string")e.textContent=x;else e.appendChild(x);tr.appendChild(e);return e;};
+      td(String(i));const s=sel_(`nsTeam${i}`,TEAMS,w.sub,v=>{w.sub=+v;draw();});td(s);
+      const q=objPoly(w.o);td(`${fmt(w.o.x)}, ${fmt(w.o.y)}${q?" · polygon "+doc.polys.indexOf(q):""}`);td(`${w.o.facing||0}°`);
+      td(button("Show",()=>{save();closeModal();setSel("obj",[w.o]);view.cx=w.o.x;view.cy=w.o.y;redraw();}));tb.appendChild(tr);});
+    if(!work.length){const tr=document.createElement("tr");const c=document.createElement("td");c.colSpan=5;c.className="note";c.textContent="No player starts yet. Place some with the Object tool (O), kind Player start.";tr.appendChild(c);tb.appendChild(tr);}
+    t.appendChild(tb);wrap.appendChild(t);}
+  draw();
+  const quick=document.createElement("div");quick.className="row";
+  quick.appendChild(button("All random",()=>{work.forEach(w=>w.sub=-1);draw();}));
+  quick.appendChild(button("Spread over the teams",()=>{work.forEach((w,i)=>w.sub=i%8);draw();}));
+  body.appendChild(quick);
+  function save(){const ch=work.some(w=>w.o.sub!==w.sub)||entry.v!==doc.info.entry;if(!ch)return;pushUndo();work.forEach(w=>w.o.sub=w.sub);doc.info.entry=entry.v;changed();}
+  openModal("Network setup: player starts",body,[button("Cancel",closeModal),button("Save",()=>{save();closeModal();status("Player starts saved.");},"primary")],{wide:true});
 }
 
 // ---- which games can play this map ----
@@ -3729,7 +3841,7 @@ function compatReasons(d=doc){
 // =============================================================== wiring
 function setUI(style){opts.uiStyle=style;document.documentElement.setAttribute("data-ui",style);$("uiModern").setAttribute("aria-pressed",style==="modern");$("uiRetro").setAttribute("aria-pressed",style==="retro");readPalette();savePrefs();redraw();renderLegend();}
 $("uiModern").onclick=()=>setUI("modern");$("uiRetro").onclick=()=>setUI("retro");
-$("bNew").onclick=openNewLevel;$("bShapes").onclick=()=>openShapesDialog(false);$("bPaint").onclick=()=>{paletteShown=true;open3D();};
+$("bNew").onclick=openNewLevel;$("bShapes").onclick=()=>openShapesDialog(false);
 $("bOpen").onclick=()=>$("fileIn").click();$("bAddMap").onclick=openAddMap;$("bMoveMap").onclick=openMoveMap;
 $("bSave").onclick=saveProject;$("bExport").onclick=openExport;
 $("bUndo").onclick=undo;$("bRedo").onclick=redo;$("bGen").onclick=openGenerate;$("b3d").onclick=open3D;
@@ -3761,7 +3873,7 @@ requestAnimationFrame(()=>{resize();fitView();});
         clearTimeout(scenTimer);try{await idb.put("scenario",serializeScenario());}catch(e){}location.replace(location.pathname+"?v="+encodeURIComponent(v));return;}}}catch(e){}
     busy=false;};
   setInterval(check,4000);window.addEventListener("focus",check);})();
-window.__forge={scenario,openMoveMap,transformDoc,get view(){return view;},setExportWrap:v=>{exportWrap=v;},setLayer,layerVis,teleClick,get layer(){return curLayer();},openAddMap,addMapFromBuffer,startPlacing,dropPlacing,finishMerge,mergeInto,get placing(){return placing;},switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;resetPolyRefs();changed();}};
+window.__forge={scenario,open3D,get view3d(){return view3d;},openPlayerStarts,openMoveMap,transformDoc,get view(){return view;},setExportWrap:v=>{exportWrap=v;},setLayer,layerVis,teleClick,get layer(){return curLayer();},openAddMap,addMapFromBuffer,startPlacing,dropPlacing,finishMerge,mergeInto,get placing(){return placing;},switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;resetPolyRefs();changed();}};
 Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
   makePolygonFromCoords,addPointAt,addSegment,fillAt,objPoly,
   screenOf(x,y){const r=canvas.getBoundingClientRect();const [sx,sy]=toS(x,y);return {x:r.left+sx,y:r.top+sy};},centroid,fitView});
