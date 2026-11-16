@@ -3336,7 +3336,10 @@ function mergeInto(A,B,P,choice={}){
   // sound tables
   const cat=(a,b)=>{if(!b)return a;if(!a)return b;const x=b64dec(a),y=b64dec(b);const u=new Uint8Array(x.length+y.length);u.set(x);u.set(y,x.length);return b64enc(u);};
   if(B.ambi)A.ambi=cat(A.ambi,B.ambi);if(B.bonk)A.bonk=cat(A.bonk,B.bonk);
-  if(!A.placement&&B.placement)A.placement=B.placement;
+  // spawn tables: add the two maps' respawn settings together, type by type (rows: flags, initial, min, max, random count, random chance)
+  if(B.placement){if(!A.placement)A.placement=B.placement;else for(const key of ["items","monsters"]){const ra=A.placement[key],rb=B.placement[key];if(!ra||!rb)continue;
+    for(let i=0;i<64;i++){const x=ra[i]||[0,0,0,0,0,0],y=rb[i]||[0,0,0,0,0,0];
+      ra[i]=[x[0]|y[0],x[1]+y[1],x[2]+y[2],x[3]+y[3],(x[4]<0||y[4]<0)?-1:x[4]+y[4],Math.max(x[5],y[5])];}}}
   // join
   A.pts.push(...B.pts);A.lines.push(...B.lines);A.polys.push(...B.polys);A.objs.push(...B.objs);
   for(const [k,v] of B.sides)A.sides.set(k,v);

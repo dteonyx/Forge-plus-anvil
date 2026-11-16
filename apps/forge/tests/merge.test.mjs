@@ -196,3 +196,17 @@ test("link with teleporter: pad points at the landing polygon and exports", asyn
   assert.equal(r.back, 10);
   assert.equal(r.backPerm, r.want);
 });
+
+test("merging adds the two maps' respawn settings together", async () => {
+  const r = await app.page.evaluate(() => {
+    const f = window.__forge;
+    const row = (a) => Array.from({ length: 64 }, () => [...a]);
+    const A = f.newDoc("inf"), B = f.newDoc("inf");
+    A.placement = { items: row([0, 0, 0, 0, 0, 0]), monsters: row([0, 0, 0, 0, 0, 0]) };
+    B.placement = { items: row([0, 0, 0, 0, 0, 0]), monsters: row([0, 0, 0, 0, 0, 0]) };
+    A.placement.monsters[3] = [1, 2, 1, 4, 0, 0]; B.placement.monsters[3] = [0, 3, 2, 5, -1, 20000];
+    f.mergeInto(A, B, { cx: 0, cy: 0, tx: 0, ty: 0, dz: 0, rot: 0 }, {});
+    return A.placement.monsters[3];
+  });
+  assert.deepEqual(r, [1, 5, 3, 9, -1, 20000]);
+});
