@@ -244,3 +244,39 @@ test("rooms can be drawn past the game's map area (for the over-the-limit test)"
   assert.ok(r.minX > 36 * 1024, "room sits past the 32 WU edge, not squashed onto it");
   assert.ok(r.warn);
 });
+
+test("Move map: the whole level moves back inside the map area, with its objects, and undo restores it", async () => {
+  const { page } = app;
+  const r = await page.evaluate(() => {
+    const f = window.__forge;
+    f.applySpec(f.randomSpec(71, "small", "solo"), false, "a");
+    const d = f.doc;
+    for (const p of d.pts) p.x += 40 * 1024;
+    for (const o of d.objs) o.x += 40 * 1024;
+    for (const n of d.notes || []) n.x += 40 * 1024;
+    f.setDoc(d);
+    const warnBefore = f.validate().some((i) => /past the edge/.test(i.title));
+    const obj0 = { x: d.objs[0].x - 40 * 1024, y: d.objs[0].y };
+    f.openMoveMap();
+    const p = f.placing;
+    const ok = p.move && p.tx === 0 && p.ty === 0;
+    return { warnBefore, ok, cx: p.cx, cy: p.cy, min0: Math.min(...d.pts.map((q) => q.x)) };
+  });
+  assert.ok(r.warnBefore);
+  assert.ok(r.ok);
+  await page.keyboard.press("Enter");
+  const a = await page.evaluate(() => {
+    const f = window.__forge, d = f.doc;
+    const xs = d.pts.map((p) => p.x);
+    const inside = d.objs.every((o) => !!d.polys.find((q) => { let c = false; const vs = q.verts; for (let i = 0, j = vs.length - 1; i < vs.length; j = i++) { const A = vs[i], B = vs[j]; if ((A.y > o.y) !== (B.y > o.y) && o.x < (B.x - A.x) * (o.y - A.y) / (B.y - A.y) + A.x) c = !c; } return c; }));
+    return { minX: Math.min(...xs), maxX: Math.max(...xs), warn: f.validate().some((i) => /past the edge/.test(i.title)), placing: !!f.placing, inside };
+  });
+  assert.equal(a.placing, false);
+  assert.equal(a.warn, false);
+  assert.ok(a.minX > -32767 && a.maxX < 32767);
+  assert.ok(a.inside, "objects moved with their rooms");
+  await page.evaluate(() => document.activeElement && document.activeElement.blur());
+  await page.keyboard.press("Control+z");
+  const u = await page.evaluate(() => Math.min(...window.__forge.doc.pts.map((p) => p.x)));
+  assert.equal(u, r.min0, "undo puts it back");
+});

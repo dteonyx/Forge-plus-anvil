@@ -334,7 +334,7 @@ function validate(){
 function limitIssues(out){
   const LIM=32767,outP=doc.pts.filter(p=>Math.abs(p.x)>LIM||Math.abs(p.y)>LIM);
   if(outP.length){const polys=doc.polys.filter(q=>q.verts.some(v=>outP.includes(v)));
-    out.push({lv:"warn",title:`${outP.length} point${outP.length>1?"s are":" is"} past the edge of the map area`,detail:`Aleph One stores positions in 16 bits, so the map can only reach about 32 WU from the centre. ${polys.length} polygon${polys.length===1?" uses":"s use"} them. On export they're squashed onto the edge, unless you tick the over-the-limit test in the Export window (then they wrap round to the other side).`,target:polys.length?{kind:"poly",items:polys}:{kind:"point",items:outP}});}
+    out.push({lv:"warn",title:`${outP.length} point${outP.length>1?"s are":" is"} past the edge of the map area`,detail:`Aleph One stores positions in 16 bits, so the map can only reach about 32 WU from the centre. ${polys.length} polygon${polys.length===1?" uses":"s use"} them. On export they're squashed onto the edge, unless you tick the over-the-limit test in the Export window (then they wrap round to the other side).`,target:polys.length?{kind:"poly",items:polys}:{kind:"point",items:outP},fix:{label:"Move map…",fn:()=>setTimeout(openMoveMap,0)}});}
   const hi=doc.polys.filter(q=>Math.abs(q.floor)>LIM||Math.abs(q.ceil)>LIM||(q.media&&(Math.abs(q.media.low)>LIM||Math.abs(q.media.high)>LIM)));
   if(hi.length)out.push({lv:"warn",title:`${hi.length} polygon${hi.length>1?"s have":" has"} a height past the limit`,detail:"Floors, ceilings and liquids can only go from about −32 to +32 WU. On export they're squashed to the limit, unless you tick the over-the-limit test (then they wrap round).",target:{kind:"poly",items:hi}});
   if(doc.polys.length){let lo=Infinity,top=-Infinity;for(const q of doc.polys){lo=Math.min(lo,q.floor);top=Math.max(top,q.ceil);}
@@ -3204,20 +3204,21 @@ async function addMapFromBuffer(buf,fname){
   picks.forEach((p,i)=>list.appendChild(button(`${i}. ${p.name}`,()=>{closeModal();startPlacing(p.get(),p.name);})));
   body.appendChild(list);openModal("Add a map to this map",body,[button("Cancel",closeModal)]);
 }
-function startPlacing(B,name){
+function startPlacing(B,name,o={}){
   if(!B.polys.length){toast("That level has no polygons to add.");return;}
   const xs=B.pts.map(p=>p.x),ys=B.pts.map(p=>p.y),g=WU/8;
   const cx=Math.round((Math.min(...xs)+Math.max(...xs))/2/g)*g,cy=Math.round((Math.min(...ys)+Math.max(...ys))/2/g)*g;
   // start to the right of the current map so it doesn't land on top of it
   // start beside the current map (right, below, left, above) so it doesn't land on top of it; if there's no room, in the middle
   const R=v=>Math.round(v/WU)*WU;
-  placing={B,name,cx,cy,tx:R(view.cx),ty:R(view.cy),dz:0,rot:0};
-  if(doc.pts.length){const ax=doc.pts.map(p=>p.x),ay=doc.pts.map(p=>p.y);const x0=Math.min(...ax),x1=Math.max(...ax),y0=Math.min(...ay),y1=Math.max(...ay),mx=(x0+x1)/2,my=(y0+y1)/2;
+  placing={B,name,cx,cy,tx:R(view.cx),ty:R(view.cy),dz:0,rot:0,move:!!o.move};
+  if(o.move){placing.tx=0;placing.ty=0;}
+  else if(doc.pts.length){const ax=doc.pts.map(p=>p.x),ay=doc.pts.map(p=>p.y);const x0=Math.min(...ax),x1=Math.max(...ax),y0=Math.min(...ay),y1=Math.max(...ay),mx=(x0+x1)/2,my=(y0+y1)/2;
     const bx0=Math.min(...xs)-cx,bx1=Math.max(...xs)-cx,by0=Math.min(...ys)-cy,by1=Math.max(...ys)-cy,gap=2*WU;
     const tries=[[x1+gap-bx0,my],[mx,y1+gap-by0],[x0-gap-bx1,my],[mx,y0-gap-by1],[mx,my]];
     for(const [x,y] of tries){placing.tx=R(x);placing.ty=R(y);if(placingFits())break;}}
   if(tool!=="select")setTool("select");
-  showPlaceBox();fitPlacing();status(`Placing “${name}”: drag it, R turns it, [ ] raise/lower, Enter places it, Esc cancels.`);
+  showPlaceBox();fitPlacing();status(o.move?`Moving the whole map: it starts centred in the game's map area. Drag it, R turns it, [ ] raise/lower, Enter moves it there, Esc cancels.`:`Placing “${name}”: drag it, R turns it, [ ] raise/lower, Enter places it, Esc cancels.`);
 }
 // where a point of the added map lands
 function placeXY(p,P=placing){const u=p.x-P.cx,v=p.y-P.cy;const r=((P.rot%4)+4)%4;
@@ -3230,7 +3231,7 @@ function fitPlacing(){const vs=[...doc.pts];const b=placingBounds();vs.push({x:b
 function showPlaceBox(){
   let box=$("placeBox");if(!box){box=document.createElement("div");box.id="placeBox";box.className="placebox";$("canvasbox").appendChild(box);}
   box.hidden=false;box.innerHTML="";
-  const t=document.createElement("div");t.className="glabel";t.textContent="Adding: "+placing.name;box.appendChild(t);
+  const t=document.createElement("div");t.className="glabel";t.textContent=(placing.move?"Moving: ":"Adding: ")+placing.name;box.appendChild(t);
   const num=(id,label,get,set)=>{const i=document.createElement("input");i.type="number";i.step="0.125";i.id=id;i.value=(get()/WU).toFixed(3);
     i.onchange=()=>{const v=parseFloat(i.value);if(isFinite(v)){set(Math.round(v*WU));redraw();}};return field(label,i,"WU");};
   box.appendChild(num("plX","X",()=>placing.tx,v=>placing.tx=v));
@@ -3239,13 +3240,14 @@ function showPlaceBox(){
   const r=document.createElement("div");r.className="row";
   r.appendChild(button("⟲ Turn",()=>rotatePlacing(-1)));r.appendChild(button("⟳ Turn",()=>rotatePlacing(1)));box.appendChild(r);
   const r2=document.createElement("div");r2.className="row";
-  r2.appendChild(button("Cancel",cancelPlacing));r2.appendChild(button("Place it",dropPlacing,"primary"));box.appendChild(r2);
+  const r0=document.createElement("div");r0.className="row";r0.appendChild(button("Centre in play area",()=>{placing.tx=0;placing.ty=0;refreshPlaceBox();redraw();}));box.appendChild(r0);
+  r2.appendChild(button("Cancel",cancelPlacing));r2.appendChild(button(placing.move?"Move it":"Place it",dropPlacing,"primary"));box.appendChild(r2);
   const n=document.createElement("p");n.className="note";n.textContent=`Drag to move · R / Shift+R turns · [ ] height (Shift: 1/8 WU) · Enter places · Esc cancels.${placing.rot?` Turned ${placing.rot*90}°.`:""}`;box.appendChild(n);
 }
 function refreshPlaceBox(){if(!placing)return;for(const [id,v] of [["plX",placing.tx],["plY",placing.ty],["plZ",placing.dz]]){const i=$(id);if(i&&document.activeElement!==i)i.value=(v/WU).toFixed(3);}}
 function hidePlaceBox(){const b=$("placeBox");if(b)b.hidden=true;}
 function rotatePlacing(d){placing.rot=((placing.rot+d)%4+4)%4;showPlaceBox();redraw();}
-function cancelPlacing(){placing=null;hidePlaceBox();status("Adding the map was cancelled.");redraw();}
+function cancelPlacing(){const mv=placing&&placing.move;placing=null;hidePlaceBox();status(mv?"Moving the map was cancelled.":"Adding the map was cancelled.");redraw();}
 function drawPlacing(){
   if(!placing)return;const B=placing.B;const ok=placingFits();
   ctx.save();
@@ -3255,13 +3257,16 @@ function drawPlacing(){
   for(const o of B.objs){const p=placeXY(o);const [x,y]=toS(p.x,p.y);ctx.fillStyle=o.kind===3?"#2fa860":"#888";ctx.fillRect(x-2,y-2,4,4);}
   const b=placingBounds();const [lx,ly]=toS(b.x0,b.y0);
   ctx.font="600 12px "+(getComputedStyle(document.body).getPropertyValue("--font-ui")||"sans-serif");ctx.textAlign="left";ctx.textBaseline="bottom";ctx.fillStyle=ok?pal.fg:pal.danger;
-  const fr=floorRange(B.polys,placing.dz),ar=floorRange(doc.polys,0);const clash=ar&&fr&&fr.lo<=ar.hi&&fr.hi>=ar.lo;
+  const fr=floorRange(B.polys,placing.dz),ar=floorRange(doc.polys,0);const clash=!placing.move&&ar&&fr&&fr.lo<=ar.hi&&fr.hi>=ar.lo;
   ctx.fillText(`${placing.name}${placing.dz?`  (raised ${placing.dz>0?"+":""}${fmt(placing.dz)} WU)`:""}  · floors ${fmt(fr.lo)} to ${fmt(fr.hi)} WU${clash?` (this map: ${fmt(ar.lo)} to ${fmt(ar.hi)}, same heights)`:""}${ok?"":"  · outside the map area"}`,lx,ly-4);
   ctx.restore();
 }
 function dropPlacing(){
   if(!placing)return;
-  if(!placingFits()&&!dropPlacing.ok){confirmBox("Past the map area","Part of the added map is past the edge of Aleph One's map area (about 32 WU from the centre). The Checks tab will warn about it, and on export those parts get squashed onto the edge unless you use the over-the-limit test. Place it anyway?","Place anyway",()=>{dropPlacing.ok=true;try{dropPlacing();}finally{dropPlacing.ok=false;}});return;}
+  if(!placingFits()&&!dropPlacing.ok){confirmBox("Past the map area",(placing.move?"Part of the map would still be":"Part of the added map is")+" past the edge of Aleph One's map area (about 32 WU from the centre). The Checks tab will warn about it, and on export those parts get squashed onto the edge unless you use the over-the-limit test. Place it anyway?","Place anyway",()=>{dropPlacing.ok=true;try{dropPlacing();}finally{dropPlacing.ok=false;}});return;}
+  if(placing.move){pushUndo();transformDoc(doc,placing);const P=placing;placing=null;hidePlaceBox();resetPolyRefs();changed();fitView();
+    const off=issues.some(i=>/past the edge/.test(i.title));
+    status(`Moved the whole map${P.rot?`, turned ${P.rot*90}°`:""}${P.dz?`, ${P.dz>0?"raised":"lowered"} ${fmt(Math.abs(P.dz))} WU`:""}.`);toast(off?"Moved. Some of it is still past the edge of the map area (see Checks).":"Moved. Ctrl+Z undoes it.");return;}
   const A=doc,B=placing.B;
   const diffs=[];
   const physKey=d=>JSON.stringify(d.physics&&d.physics.mode!=="none"?d.physics:{mode:"none"});
@@ -3336,23 +3341,15 @@ function mergeInto(A,B,P,choice={}){
       if(s.panel&&panelKeyOf(s.panel.type)==="light"&&own)s.panel.perm=fixLi(s.panel.perm,own,off)??s.panel.perm;}};
   fixLights(A,aLights,0);fixLights(B,bLights,aLights);
   if(bLights){const bl=B.lights.map(raw=>{if(!tagOff)return raw;const u=b64dec(raw);const t=(u[90]<<24>>16)|u[91];if(t>0){const nt=t+tagOff;u[90]=(nt>>8)&255;u[91]=nt&255;}return b64enc(u);});A.lights=[...(A.lights||[]),...bl];}
-  // geometry of B: move, turn, raise
-  const rot=((P.rot%4)+4)%4;const dz=P.dz|0;const wrapWU=v=>((Math.round(v)%WU)+WU)%WU;
-  const before=new Map(B.polys.map(q=>[q,centroid(q.verts)]));
-  for(const p of B.pts){const n=placeXY(p,P);p.x=n.x;p.y=n.y;}
-  for(const q of B.polys){const c0=before.get(q),c1=centroid(q.verts);
-    // floor/ceiling textures are laid out in world space: shift their origin so each polygon keeps its pattern
-    q.fox=wrapWU((q.fox||0)-(c1.x-c0.x));q.foy=wrapWU((q.foy||0)-(c1.y-c0.y));q.cox=wrapWU((q.cox||0)-(c1.x-c0.x));q.coy=wrapWU((q.coy||0)-(c1.y-c0.y));
-    if(dz){q.floor+=dz;q.ceil+=dz;if(q.media){q.media.low+=dz;q.media.high+=dz;}if(q.plat){if(q.plat.min!=null&&q.plat.min!==-1)q.plat.min+=dz;if(q.plat.max!=null&&q.plat.max!==-1)q.plat.max+=dz;}}
-    if(rot&&q.media)q.media.dir=(((q.media.dir||0)+rot*90)%360+360)%360;
+  transformDoc(B,P);
+  for(const q of B.polys){
     if([7,9].includes(q.type)&&q.perm>=0)q.perm+=polyOff;
     if(q.type===10&&q.perm>=0)q.perm+=polyOff;
     if(q.plat&&q.plat.tag>0&&tagOff)q.plat.tag+=tagOff;
     if(q.amb!=null&&q.amb>=0)q.amb+=ambOff;if(q.rnd!=null&&q.rnd>=0)q.rnd+=rndOff;}
   for(const s of sidesOf(B))if(s.panel){const key=panelKeyOf(s.panel.type);
     if(key==="platform"&&s.panel.perm>=0)s.panel.perm+=polyOff;else if(key==="terminal"&&s.panel.perm>=0)s.panel.perm+=termOff;else if(key==="tag"&&s.panel.perm>0&&tagOff)s.panel.perm+=tagOff;}
-  for(const o of B.objs){const n=placeXY(o,P);o.x=n.x;o.y=n.y;if(o.kind!==5)o.facing=(((o.facing||0)+rot*90)%360+360)%360;if(o.pi!=null&&o.pi>=0)o.pi+=polyOff;}
-  for(const nt of B.notes||[]){const n=placeXY(nt,P);nt.x=n.x;nt.y=n.y;}
+  for(const o of B.objs)if(o.pi!=null&&o.pi>=0)o.pi+=polyOff;
   for(const t of B.terms||[])t.script=String(t.script||"").replace(/^(#INTRALEVEL TELEPORT )(\d+)/gm,(_,h,v)=>h+(+v+polyOff));
   // sound tables
   const cat=(a,b)=>{if(!b)return a;if(!a)return b;const x=b64dec(a),y=b64dec(b);const u=new Uint8Array(x.length+y.length);u.set(x);u.set(y,x.length);return b64enc(u);};
@@ -3365,8 +3362,29 @@ function mergeInto(A,B,P,choice={}){
   A.pts.push(...B.pts);A.lines.push(...B.lines);A.polys.push(...B.polys);A.objs.push(...B.objs);
   for(const [k,v] of B.sides)A.sides.set(k,v);
   A.notes=[...(A.notes||[]),...(B.notes||[])];A.terms=[...(A.terms||[]),...(B.terms||[])];
-  return {polys:B.polys.length,objs:B.objs.length,polyTotal:A.polys.length,rotatedFloors:!!rot};
+  return {polys:B.polys.length,objs:B.objs.length,polyTotal:A.polys.length,rotatedFloors:!!(((P.rot%4)+4)%4)};
 }
+// Move, turn (quarter turns) and raise a whole level in place, by a placement P {cx,cy,tx,ty,dz,rot}.
+function transformDoc(B,P){
+  const rot=((P.rot%4)+4)%4;const dz=P.dz|0;const wrapWU=v=>((Math.round(v)%WU)+WU)%WU;
+  const before=new Map(B.polys.map(q=>[q,centroid(q.verts)]));
+  for(const p of B.pts){const n=placeXY(p,P);p.x=n.x;p.y=n.y;}
+  for(const q of B.polys){const c0=before.get(q),c1=centroid(q.verts);
+    // floor/ceiling textures are laid out in world space: shift their origin so each polygon keeps its pattern
+    q.fox=wrapWU((q.fox||0)-(c1.x-c0.x));q.foy=wrapWU((q.foy||0)-(c1.y-c0.y));q.cox=wrapWU((q.cox||0)-(c1.x-c0.x));q.coy=wrapWU((q.coy||0)-(c1.y-c0.y));
+    if(dz){q.floor+=dz;q.ceil+=dz;if(q.media){q.media.low+=dz;q.media.high+=dz;}if(q.plat){if(q.plat.min!=null&&q.plat.min!==-1)q.plat.min+=dz;if(q.plat.max!=null&&q.plat.max!==-1)q.plat.max+=dz;}}
+    if(rot&&q.media)q.media.dir=(((q.media.dir||0)+rot*90)%360+360)%360;}
+  for(const o of B.objs){const n=placeXY(o,P);o.x=n.x;o.y=n.y;if(o.kind!==5)o.facing=(((o.facing||0)+rot*90)%360+360)%360;}
+  for(const nt of B.notes||[]){const n=placeXY(nt,P);nt.x=n.x;nt.y=n.y;}
+  if(dz&&B.info.layers)for(const l of B.info.layers){l.lo+=dz;l.hi+=dz;}
+}
+// "Move map…": the whole level as a ghost, starting centred in the game's map area; drop it to move everything there.
+function openMoveMap(){
+  if(placing){toast("Finish placing first (Enter places, Esc cancels).");return;}
+  if(!doc.pts.length){toast("The level is empty.");return;}
+  startPlacing(doc,doc.info.name,{move:true});
+}
+
 // =============================================================== layers (show one height range at a time)
 // A layer is a floor-height range saved with the level (info.layers). Picking one hides every polygon whose floor is
 // outside it, with its lines, points, objects and notes, so overlapping or stacked parts can be edited apart.
@@ -3712,7 +3730,7 @@ function compatReasons(d=doc){
 function setUI(style){opts.uiStyle=style;document.documentElement.setAttribute("data-ui",style);$("uiModern").setAttribute("aria-pressed",style==="modern");$("uiRetro").setAttribute("aria-pressed",style==="retro");readPalette();savePrefs();redraw();renderLegend();}
 $("uiModern").onclick=()=>setUI("modern");$("uiRetro").onclick=()=>setUI("retro");
 $("bNew").onclick=openNewLevel;$("bShapes").onclick=()=>openShapesDialog(false);$("bPaint").onclick=()=>{paletteShown=true;open3D();};
-$("bOpen").onclick=()=>$("fileIn").click();$("bAddMap").onclick=openAddMap;
+$("bOpen").onclick=()=>$("fileIn").click();$("bAddMap").onclick=openAddMap;$("bMoveMap").onclick=openMoveMap;
 $("bSave").onclick=saveProject;$("bExport").onclick=openExport;
 $("bUndo").onclick=undo;$("bRedo").onclick=redo;$("bGen").onclick=openGenerate;$("b3d").onclick=open3D;
 $("tLevels").onclick=()=>setTab("levels");$("tInspect").onclick=()=>setTab("inspect");$("tLevel").onclick=()=>setTab("level");$("tIssues").onclick=()=>setTab("issues");
@@ -3743,7 +3761,7 @@ requestAnimationFrame(()=>{resize();fitView();});
         clearTimeout(scenTimer);try{await idb.put("scenario",serializeScenario());}catch(e){}location.replace(location.pathname+"?v="+encodeURIComponent(v));return;}}}catch(e){}
     busy=false;};
   setInterval(check,4000);window.addEventListener("focus",check);})();
-window.__forge={scenario,get view(){return view;},setExportWrap:v=>{exportWrap=v;},setLayer,layerVis,teleClick,get layer(){return curLayer();},openAddMap,addMapFromBuffer,startPlacing,dropPlacing,finishMerge,mergeInto,get placing(){return placing;},switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;resetPolyRefs();changed();}};
+window.__forge={scenario,openMoveMap,transformDoc,get view(){return view;},setExportWrap:v=>{exportWrap=v;},setLayer,layerVis,teleClick,get layer(){return curLayer();},openAddMap,addMapFromBuffer,startPlacing,dropPlacing,finishMerge,mergeInto,get placing(){return placing;},switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;resetPolyRefs();changed();}};
 Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
   makePolygonFromCoords,addPointAt,addSegment,fillAt,objPoly,
   screenOf(x,y){const r=canvas.getBoundingClientRect();const [sx,sy]=toS(x,y);return {x:r.left+sx,y:r.top+sy};},centroid,fitView});
