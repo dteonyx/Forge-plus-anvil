@@ -77,7 +77,9 @@ Format facts confirmed while building are in "Format notes" below.
 - [x] Item and monster spawning tables (Forge's Item/Monster Parameters): start with, min, max, total, chance, random spots
 - [x] Facing and liquid-current dials; door/lift speed in WU per second; control panel flags (needs light, destructible, shoot to toggle)
 - [x] Level tab says whether a map needs Infinity (Jjaro textures, KKV-7 SMG, Jjaro goo)
-- [ ] Landscape (sky) textures on walls/ceilings
+- [x] Landscape (sky) textures on walls/ceilings
+- [x] Add a map (merge another level in), height layers, teleporter link tool, Move map, Network setup, Single lines tool (0.12–0.17)
+- [x] Levels made for the Unreal remake: no size limit; full values in the FP32 chunk (`docs/BIG_MAPS.md`). Export to Unreal (.glb) removed: the remake reads .sceA files (0.18)
 - [x] Level settings: name, game, environment, landscape, game types, environment flags, mission flags, Marathon 1 compatibility flags
 - [x] Terminals: script editor (#LOGON/#PICT/…; $B/$I/$U/$C codes) with live preview; reads and writes Bungie's format
 
@@ -89,6 +91,8 @@ Format facts confirmed while building are in "Format notes" below.
 - [x] Drag a surface to slide its texture; touching pieces with the same texture move and line up as one, like Forge (Ctrl moves one piece); Caps Lock + drag (as in Forge) raises or lowers a floor or ceiling
 - [x] Mouse look (hold the right button, or M to lock the mouse); mouse wheel picks textures; any wall set or sky on any level
 - [x] Transfer modes shown live: landscape (sky), slides, wander, pulsate, wobble, static, invisible (Forge.exe 0.10.0)
+- [x] Doors, lifts, switches, triggers and teleporters work like the game (E is the action key); Visual view draws overlapping polygons (5D space) like Aleph One, with portals; see-through line textures (Shift+click/drag)
+- [x] Copy/paste takes texture, transfer mode and light; right-click surface menu (0.16)
 
 ### Phase 5 — Anvil-style tools
 - [~] Shapes reading: wall collections decoded for Marathon 1 (resource fork; MacBinary/AppleSingle) and Durandal/Infinity; sprites and sequences not yet
