@@ -2379,7 +2379,11 @@ function open3D(at={}){
   // the surface (and distance) under a screen point; center of the screen when no event is given
   function surfAt(e){const p=new THREE.Vector2(0,0);if(e){const r=cv.getBoundingClientRect();p.set(((e.clientX-r.left)/r.width)*2-1,-((e.clientY-r.top)/r.height)*2+1);}
     ray.setFromCamera(p,camera);const hit=firstSeen(ray.intersectObjects(meshes,false));const sf=hit?surfOf.get(hit.object)[hit.faceIndex]:null;return sf&&sf.kind!=="media"?{sf,dist:hit.distance}:null;}
-  function updateAim(){ray.setFromCamera(center,camera);const hit=firstSeen(ray.intersectObjects(meshes,false));
+  // Without mouse look the surface under the mouse pointer is the one painted, copied and edited; with mouse look, the crosshair's
+  let mouseAt=null;const mouseNdc=new THREE.Vector2();
+  const aimEv=()=>document.pointerLockElement!==cv&&mouseAt?mouseAt:null;
+  function updateAim(){const ev=aimEv();if(ev){const r=cv.getBoundingClientRect();mouseNdc.set(((ev.clientX-r.left)/r.width)*2-1,-((ev.clientY-r.top)/r.height)*2+1);}
+    ray.setFromCamera(ev?mouseNdc:center,camera);const hit=firstSeen(ray.intersectObjects(meshes,false));
     aim=hit?surfOf.get(hit.object)[hit.faceIndex]:null;if(aim&&aim.kind==="media")aim=null;
     if(aim){hlGeo.setAttribute("position",new THREE.Float32BufferAttribute(aim.corners.flat(),3));hl.visible=paletteShown;}else hl.visible=false;}
   // ===== drawing like Aleph One: start from the polygon you're in and draw only what shows through its openings =====
@@ -2559,7 +2563,7 @@ function open3D(at={}){
   // Delete: clear the see-through texture you're aiming at (or the first one through the opening), both sides
   function clearSeeThrough(){let a=null,b=null;
     if(aim&&aim.kind==="wall"&&aim.part==="trans"){a=aim.a;b=aim.b;}
-    else{const o=openingAt(null,o=>!!((sideGet(o.a,o.b)||{}).trans||(sideGet(o.b,o.a)||{}).trans));if(o){a=o.a;b=o.b;}}
+    else{const o=openingAt(aimEv(),o=>!!((sideGet(o.a,o.b)||{}).trans||(sideGet(o.b,o.a)||{}).trans));if(o){a=o.a;b=o.b;}}
     if(!a){status(aim&&aim.kind==="wall"?"Walls always have a texture; paint another one over it. Delete clears see-through textures (windows, grates).":"Aim at a see-through texture (a window or grate) to clear it.");return;}
     clearLine(a,b);}
   function clearLine(a,b){pushUndo();sideSet(a,b,"trans",null);sideSet(b,a,"trans",null);refresh();status("Cleared the see-through texture from that line (both sides).");}
@@ -2630,7 +2634,7 @@ function open3D(at={}){
     wrap.querySelector("#h3pad").style.bottom=v?"calc(150px + env(safe-area-inset-bottom,0px))":"";if(v)renderPalette();updateAim();}
   const helpEl=wrap.querySelector("#h3help"),mouseBtn=wrap.querySelector("#h3mouse");
   // which way the mouse works right now, always shown in the top bar
-  function showMouseMode(){const locked=document.pointerLockElement===cv;mouseBtn.classList.toggle("on",locked);mouseBtn.textContent=locked?"Mouse look: on":"Mouse look";
+  function showMouseMode(){const locked=document.pointerLockElement===cv;const cr=wrap.querySelector("#h3cross");if(cr)cr.hidden=!locked&&!!mouseAt&&paletteShown;mouseBtn.classList.toggle("on",locked);mouseBtn.textContent=locked?"Mouse look: on":"Mouse look";
     helpEl.textContent=(locked?"Mouse look is on: the crosshair "+(paletteShown?"paints and drags":"aims")+" · M or Esc frees the mouse":"Hold the right mouse button to look around · M locks mouse look"+(paletteShown?" · left-click paints, drag slides textures":" · drag to look"))
       +" · WASD / arrows move · E uses doors and switches · Shift runs · F flies · P paint mode · Esc closes";}
   function lockMouse(on){try{if(on&&document.pointerLockElement!==cv){const r=cv.requestPointerLock();if(r&&r.catch)r.catch(()=>{});}else if(!on&&document.pointerLockElement)document.exitPointerLock();}catch(_){}}
@@ -2642,7 +2646,7 @@ function open3D(at={}){
   const onKey=e=>{if(!$("modal").hidden)return;if(e.target&&e.target.tagName==="INPUT"&&e.key!=="Escape")return;const k=e.key.toLowerCase();
     if((e.ctrlKey||e.metaKey)&&k==="z"){e.preventDefault();e.shiftKey?redo():undo();refresh();return;}
     if(k==="escape"){if(ctx){closeMenu();return;}if(document.pointerLockElement)return;close();return;}
-    if(k===" "){e.preventDefault();if(!e.repeat){if(e.shiftKey&&paletteShown){const o=openingAt(null),h=surfAt();if(o&&(!h||o.dist<=h.dist+0.02)){paintOpening(null);return;}}paint(e.shiftKey);}return;}
+    if(k===" "){e.preventDefault();if(!e.repeat){if(e.shiftKey&&paletteShown){const ev=aimEv(),o=openingAt(ev),h=surfAt(ev);if(o&&(!h||o.dist<=h.dist+0.02)){paintOpening(ev);return;}}updateAim();paint(e.shiftKey);}return;}
     if(k==="m"){lockMouse(document.pointerLockElement!==cv);return;}
     if(k==="f"){setFly(!fly);return;}if(k==="p"||k==="tab"){e.preventDefault();setPalette(!paletteShown);return;}
     if(k==="g"){grab();return;}if(k==="delete"||k==="backspace"){e.preventDefault();clearSeeThrough();return;}if(k==="o"){wrap.querySelector("#h3doors").click();return;}
@@ -2721,7 +2725,9 @@ function open3D(at={}){
     if(e.button===0&&paletteShown&&e.pointerType==="mouse"){drag=startDrag(e,locked);if(drag){e.preventDefault();if(!locked)cv.setPointerCapture(e.pointerId);return;}if(locked)return;}
     if(locked){if(e.button===0)paint(e.shiftKey);return;}
     look={x:e.clientX,y:e.clientY,sx:e.clientX,sy:e.clientY,touch:e.pointerType!=="mouse"};cv.setPointerCapture(e.pointerId);});
+  cv.addEventListener("pointerleave",()=>{mouseAt=null;showMouseMode();});
   cv.addEventListener("pointermove",e=>{
+    if(e.pointerType==="mouse"&&!rlook&&!look){const had=!!mouseAt;mouseAt={clientX:e.clientX,clientY:e.clientY};if(!had)showMouseMode();}
     if(rlook){st.yaw+=(e.clientX-rlook.x)*0.005;st.pitch=clamp(st.pitch-(e.clientY-rlook.y)*0.005,-1.3,1.3);rlook.x=e.clientX;rlook.y=e.clientY;return;}
     if(drag){const locked=document.pointerLockElement===cv;moveDrag(drag,locked?e.movementX:e.clientX-(drag.lx??drag.sx),locked?e.movementY:e.clientY-(drag.ly??drag.sy));drag.lx=e.clientX;drag.ly=e.clientY;return;}
     if(document.pointerLockElement===cv){st.yaw+=e.movementX*0.0025;st.pitch=clamp(st.pitch-e.movementY*0.0025,-1.3,1.3);return;}

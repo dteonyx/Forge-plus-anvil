@@ -114,3 +114,21 @@ test("doors: E opens a door, and E again while it's open closes it straight away
   assert.ok(r.waiting, "it waits open");
   assert.ok(r.closing, "E closed it without waiting out the delay");
 });
+
+test("without mouse look, aiming follows the mouse pointer, not the crosshair", async (t) => {
+  if (!real) return t.skip("needs the real three.js and WebGL");
+  const ids = await setup();
+  await app.page.evaluate((ids) => { const f = window.__forge; f.open3D({ poly: f.doc.polys[ids.A] }); f.view3d.test.setYaw(Math.PI); }, ids);
+  const box = await app.page.locator(".view3d > canvas").boundingBox();
+  await app.page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.72);
+  await app.page.waitForTimeout(150);
+  const low = await app.page.evaluate(() => { const a = window.__forge.view3d.test.aim; return a && a.kind; });
+  await app.page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.12);
+  await app.page.waitForTimeout(150);
+  const high = await app.page.evaluate(() => { const a = window.__forge.view3d.test.aim; return a && a.kind; });
+  const crossHidden = await app.page.evaluate(() => document.getElementById("h3cross").hidden);
+  await app.page.evaluate(() => window.__forge.view3d.close());
+  assert.equal(low, "floor");
+  assert.equal(high, "ceil");
+  assert.ok(crossHidden, "the crosshair hides while the mouse does the aiming");
+});
