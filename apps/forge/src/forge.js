@@ -51,7 +51,8 @@ const MISSIONS = [[1,"Extermination"],[2,"Exploration"],[4,"Retrieval"],[8,"Repa
 const M1_COMPAT = [[0x0200,"M1 monster activation range"],[0x0400,"M1 weapons"],[0x0010,"M1 glue polygons"],[0x0020,"Floor is lava (M1 ouch)"],[0x0040,"M1 rebellion"],[0x0080,"Landscape picks music"],[0x0100,"Terminals stop time"]];
 const MON_FLAGS = [[1,"Teleports in"],[2,"From ceiling"],[4,"Blind"],[8,"Deaf"],[16,"Floats / teleports out"],[32,"Network only"]];
 const GRIDS = [[64,"1/16 WU"],[128,"1/8 WU"],[256,"1/4 WU"],[512,"1/2 WU"],[1024,"1 WU"]];
-const MAXC = 32000;
+const MAXC = 32000; // the game's map area (16-bit positions), drawn as the dashed border
+const EDIT_MAX = 96*1024; // how far the editor itself lets you build, so going past the game's limit can be tested
 
 // =============================================================== document model
 // Points, lines and polygons reference each other by object, so edits never need reindexing.
@@ -169,7 +170,7 @@ function splitLine(l,x,y){
   return r;
 }
 function addPointAt(x,y,tol=1){
-  x=Math.round(clamp(x,-MAXC,MAXC));y=Math.round(clamp(y,-MAXC,MAXC));
+  x=Math.round(clamp(x,-EDIT_MAX,EDIT_MAX));y=Math.round(clamp(y,-EDIT_MAX,EDIT_MAX));
   let best=null,bd=tol;for(const p of doc.pts){const d=hyp(p.x,p.y,x,y);if(d<=bd){bd=d;best=p;}}
   if(best)return best;
   for(const l of doc.lines){if(distSeg({x,y},l.a,l.b)<=tol){const t=segT({x,y},l.a,l.b);if(t>0&&t<1)return splitLine(l,x,y);}}
@@ -2465,7 +2466,7 @@ function open3D(){
   const keys=new Set();const EYE=0.66*WU,BODY=0.8*WU,STEP=0.3*WU;
   let mvPoly=null; // the polygon the last allowed move ends in
   function canMove(nx,ny){
-    if(fly)return Math.abs(nx)<MAXC&&Math.abs(ny)<MAXC;
+    if(fly)return Math.abs(nx)<EDIT_MAX&&Math.abs(ny)<EDIT_MAX;
     const q0=curPoly?trace(curPoly,st.x,st.y,nx,ny):polyAtPoint({x:nx,y:ny});if(!q0)return false;const q=hNow(q0);mvPoly=q0;
     if(q.floor-st.feet>STEP)return false;if(q.ceil-Math.max(q.floor,st.feet)<BODY)return false;
     for(const l of doc.lines)if(l.solid&&segIntersect({x:st.x,y:st.y},{x:nx,y:ny},l.a,l.b))return false;
@@ -2686,7 +2687,7 @@ function open3D(){
     if(m>0){fx=fx/m*spd;fy=fy/m*spd;
       if(fly){const cp=Math.cos(st.pitch);st.x+=fx*cp;st.y+=fy*cp;if(keys.has("w")||keys.has("arrowup"))st.feet+=Math.sin(st.pitch)*spd;if(keys.has("s")||keys.has("arrowdown"))st.feet-=Math.sin(st.pitch)*spd;}
       else if(canMove(st.x+fx,st.y+fy)){st.x+=fx;st.y+=fy;moved=true;}else if(canMove(st.x+fx,st.y)){st.x+=fx;moved=true;}else if(canMove(st.x,st.y+fy)){st.y+=fy;moved=true;}}
-    st.x=clamp(st.x,-MAXC,MAXC);st.y=clamp(st.y,-MAXC,MAXC);
+    st.x=clamp(st.x,-EDIT_MAX,EDIT_MAX);st.y=clamp(st.y,-EDIT_MAX,EDIT_MAX);
     if(fly){if(keys.has("r"))st.feet+=spd;if(keys.has("c"))st.feet-=spd;}
     else{const q0=here();const q=q0?hNow(q0):null;if(q){if(st.feet<q.floor)st.feet=Math.min(q.floor,st.feet+4*WU*dt);else if(st.feet>q.floor){st.vy-=9*WU*dt;st.feet=Math.max(q.floor,st.feet+st.vy*dt);}if(st.feet<=q.floor)st.vy=0;}}
     if(!fly){if(moved&&mvPoly&&mvPoly!==curPoly){curPoly=mvPoly;entered(mvPoly);}}else curPoly=polyAtPoint(st);
@@ -3742,7 +3743,7 @@ requestAnimationFrame(()=>{resize();fitView();});
         clearTimeout(scenTimer);try{await idb.put("scenario",serializeScenario());}catch(e){}location.replace(location.pathname+"?v="+encodeURIComponent(v));return;}}}catch(e){}
     busy=false;};
   setInterval(check,4000);window.addEventListener("focus",check);})();
-window.__forge={scenario,setExportWrap:v=>{exportWrap=v;},setLayer,layerVis,teleClick,get layer(){return curLayer();},openAddMap,addMapFromBuffer,startPlacing,dropPlacing,finishMerge,mergeInto,get placing(){return placing;},switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;resetPolyRefs();changed();}};
+window.__forge={scenario,get view(){return view;},setExportWrap:v=>{exportWrap=v;},setLayer,layerVis,teleClick,get layer(){return curLayer();},openAddMap,addMapFromBuffer,startPlacing,dropPlacing,finishMerge,mergeInto,get placing(){return placing;},switchLevel,openFileBuffer,openWholeMap,buildScenarioFile,serializeScenario,loadScenarioObject,compileTerminal,parseTerminalChunk,decodePict,encodePict,parseResourceFork,platformInfo,openTerminals,openPictures,installShapes,removeShapes,shapeStore,texCount,landCount,landCol,openTexturePicker,openSurfaceDialog,texCanvasFor,openShapesDialog,get doc(){return doc;},buildMapChunks,buildWadFile,validate,serialize,parseWad,levelToDoc,buildFromSpec,randomSpec,sampleSpec,applySpec,autoLabels,walkDistances,parseLabel,setTool,texPalette,doExport,openGenerate,wallRun,flatRun,newDoc,setDoc:d=>{doc=d;resetPolyRefs();changed();}};
 Object.assign(window.__forge,{setViewMode,armPaint,disarmPaint,paletteEntries,applyPaint,openSpawnTable,openLightTable,openLightEditor,decodeLight,encodeLight,addTableLight,LIGHT_PRESETS,compatReasons,setTab,setSel,
   makePolygonFromCoords,addPointAt,addSegment,fillAt,objPoly,
   screenOf(x,y){const r=canvas.getBoundingClientRect();const [sx,sy]=toS(x,y);return {x:r.left+sx,y:r.top+sy};},centroid,fitView});

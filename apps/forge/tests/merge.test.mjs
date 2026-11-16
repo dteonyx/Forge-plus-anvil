@@ -231,3 +231,16 @@ test("past Aleph One's limits: Checks warns, export squashes by default and wrap
   assert.ok(r.bx < 0, "wrapped round to the other side");
   assert.ok(r.bc < 0, "height wrapped round");
 });
+
+test("rooms can be drawn past the game's map area (for the over-the-limit test)", async () => {
+  const { page } = app;
+  await page.evaluate(() => { const f = window.__forge; f.applySpec(f.randomSpec(61, "small", "solo"), false, "a"); f.view.cx = 40 * 1024; f.view.cy = 0; f.view.scale = 42 / 1024; f.setTool("rect"); });
+  const box = await page.locator("#map").boundingBox();
+  await page.mouse.move(box.x + box.width / 2 - 60, box.y + box.height / 2 - 60);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 60, box.y + box.height / 2 + 60, { steps: 4 });
+  await page.mouse.up();
+  const r = await page.evaluate(() => { const d = window.__forge.doc; const q = d.polys[d.polys.length - 1]; return { minX: Math.min(...q.verts.map((v) => v.x)), warn: window.__forge.validate().some((i) => /past the edge/.test(i.title)) }; });
+  assert.ok(r.minX > 36 * 1024, "room sits past the 32 WU edge, not squashed onto it");
+  assert.ok(r.warn);
+});
