@@ -1179,13 +1179,13 @@ function draw(){
   drawTeleLink();
   drawPlacing();
   // in-progress drawing
-  if(tool==="line"&&chain.length){const last=chain[chain.length-1];const [x0,y0]=toS(last.x,last.y);const t=snapPoint(cursorW);const [x1,y1]=toS(t.x,t.y);
+  if(isLineTool()&&chain.length){const last=chain[chain.length-1];const [x0,y0]=toS(last.x,last.y);const t=snapPoint(cursorW);const [x1,y1]=toS(t.x,t.y);
     ctx.strokeStyle=pal.accent;ctx.lineWidth=2;ctx.setLineDash([6,4]);ctx.beginPath();ctx.moveTo(x0,y0);ctx.lineTo(x1,y1);ctx.stroke();ctx.setLineDash([]);
     ctx.font="11px monospace";ctx.fillStyle=pal.fg;ctx.textAlign="left";ctx.fillText((hyp(last.x,last.y,t.x,t.y)/WU).toFixed(3)+" WU",x1+10,y1-10);}
   if(drag&&drag.type==="rect"){const a=drag.start,b=drag.cur;const [x0,y0]=toS(a.x,a.y),[x1,y1]=toS(b.x,b.y);ctx.fillStyle=pal.accent;ctx.globalAlpha=.18;ctx.fillRect(x0,y0,x1-x0,y1-y0);ctx.globalAlpha=1;ctx.strokeStyle=pal.accent;ctx.lineWidth=2;ctx.strokeRect(x0,y0,x1-x0,y1-y0);
     ctx.font="11px monospace";ctx.fillStyle=pal.fg;ctx.textAlign="left";ctx.fillText(`${(Math.abs(b.x-a.x)/WU).toFixed(2)} × ${(Math.abs(b.y-a.y)/WU).toFixed(2)} WU`,Math.max(x0,x1)+8,Math.max(y0,y1)+14);}
   // snap cursor
-  if(["line","rect","object","fill","note"].includes(tool)&&!isTouch){const t=snapPoint(cursorW);const [x,y]=toS(t.x,t.y);ctx.strokeStyle=pal.accent;ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.stroke();}
+  if(["line","line1","rect","object","fill","note"].includes(tool)&&!isTouch){const t=snapPoint(cursorW);const [x,y]=toS(t.x,t.y);ctx.strokeStyle=pal.accent;ctx.lineWidth=1.5;ctx.beginPath();ctx.arc(x,y,5,0,Math.PI*2);ctx.stroke();}
 }
 function drawObj(o,hl){
   const [x,y]=toS(o.x,o.y);const r=clamp(view.scale*WU*0.16,5,11);const ang=o.facing*Math.PI/180;
@@ -1251,12 +1251,14 @@ canvas.addEventListener("pointerdown",e=>{
     if(h.kind==="line"){drag=null;return;}
     const movers=h.kind==="poly"?[...new Set(sel.items.flatMap(q=>q.verts))]:h.kind==="point"?[h.item]:sel.items;
     drag={type:"move",kind:h.kind,start:w,movers,orig:movers.map(m=>({x:m.x,y:m.y})),moved:false,anchor:h.item};
-  } else if(tool==="line"){
+  } else if(isLineTool()){
     const t=snapPoint(w);pushUndo();
     const p=t.pt||addPointAt(t.x,t.y,1);
-    if(!chain.length){chain=[p];status("Click to add the next corner. Click the first point to close, or press Enter to finish.");}
+    if(!chain.length){chain=[p];status(tool==="line1"?"Click where the line ends.":"Click to add the next corner. Click the first point to close, or press Enter to finish.");}
     else{const last=chain[chain.length-1];if(p===last){undoStack.pop();return;}
       addSegment(last,p);
+      // single lines (like the original Forge): each line stops where it ends; click again to start the next
+      if(tool==="line1"){chain=[];status("Line placed. Click to start the next one.");changed();return;}
       if(p===chain[0]&&chain.length>=3){const ring=[...chain];chain=[];
         if(opts.autoFill){const c=centroid(ring);const r=fillAt(c.x,c.y);if(r.poly){setSel("poly",[r.poly]);status("Loop closed and filled.");}else status("Loop closed. "+r.err);}else status("Loop closed.");}
       else chain.push(p);}
@@ -1325,9 +1327,15 @@ function endPointer(e){
 canvas.addEventListener("pointerup",endPointer);canvas.addEventListener("pointercancel",endPointer);
 canvas.addEventListener("pointerleave",()=>{if(hover){hover=null;redraw();}});
 canvas.addEventListener("contextmenu",e=>e.preventDefault());
-canvas.addEventListener("dblclick",()=>{if(tool==="line"&&chain.length){chain=[];status("Line finished.");redraw();}});
+canvas.addEventListener("dblclick",()=>{if(isLineTool()&&chain.length){chain=[];status("Line finished.");redraw();}});
+// In the Draw view the mouse wheel steps through the tools (Ctrl+wheel or a pinch zooms); in the other views it zooms
+let toolWheel=0;
 canvas.addEventListener("wheel",e=>{e.preventDefault();
   if(e.shiftKey){view.cx+=e.deltaY/view.scale;redraw();return;}
+  if(opts.viewMode==="draw"&&!e.ctrlKey&&!e.metaKey&&!placing){const dy=e.deltaMode===1?e.deltaY*40:e.deltaY;
+    if(Math.sign(dy)!==Math.sign(toolWheel))toolWheel=0;toolWheel+=dy;const step=Math.abs(dy)>=50?Math.sign(dy):Math.trunc(toolWheel/80);if(!step)return;toolWheel=0;
+    const ids=TOOLS.map(t=>t[0]);const i=ids.indexOf(tool);const n=ids[((i+Math.sign(step))%ids.length+ids.length)%ids.length];setTool(n);
+    const t=TOOLS.find(x=>x[0]===n);status(`${t[1]} (${t[2]}). Mouse wheel: next tool · Ctrl+wheel zooms`);return;}
   const before=toW(e.offsetX,e.offsetY);const f=Math.exp(-e.deltaY*(e.ctrlKey?0.01:0.0015));
   view.scale=clamp(view.scale*f,2/WU,400/WU);const after=toW(e.offsetX,e.offsetY);view.cx+=before.x-after.x;view.cy+=before.y-after.y;updateStatus();redraw();},{passive:false});
 function zoomBy(f){view.scale=clamp(view.scale*f,2/WU,400/WU);updateStatus();redraw();}
@@ -1356,7 +1364,7 @@ document.addEventListener("keydown",e=>{
   }
   if(k==="pageup"||k==="pagedown"){e.preventDefault();stepLayer(k==="pageup"?1:-1);return;}
   if(mod&&k==="i"){e.preventDefault();openSpawnTable("items");return;}
-  const tmap={v:"select",l:"line",r:"rect",f:"fill",o:"object",n:"note",h:"pan",t:"tele"};
+  const tmap={v:"select",l:"line",k:"line1",r:"rect",f:"fill",o:"object",n:"note",h:"pan",t:"tele"};
   if(tmap[k]){setTool(tmap[k]);return;}
   if(k==="escape"&&teleFrom){teleFrom=null;status("Teleporter link cancelled.");redraw();return;}
   if(k==="escape"&&vpaint){disarmPaint();return;}
@@ -1389,6 +1397,7 @@ const $=id=>document.getElementById(id);
 const ICONS={
   select:'<path d="M5 3l12 9-5.5 1L9 19z"/>',
   line:'<circle cx="5" cy="18" r="2"/><circle cx="19" cy="6" r="2"/><path d="M6.5 16.5L17.5 7.5"/>',
+  line1:'<circle cx="5" cy="12" r="2"/><circle cx="19" cy="12" r="2"/><path d="M7 12h10"/>',
   rect:'<rect x="4" y="5" width="16" height="13"/><path d="M4 9h16" stroke-dasharray="2 2"/>',
   fill:'<path d="M4 18l7-12 7 12z"/><path d="M8 15h8M10 12h4"/>',
   object:'<path d="M12 3l7 9-7 9-7-9z"/>',
@@ -1398,10 +1407,11 @@ const ICONS={
   fit:'<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   zin:'<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5L20 20M8.5 11h5M11 8.5v5"/>',
   zout:'<circle cx="11" cy="11" r="6"/><path d="M15.5 15.5L20 20M8.5 11h5"/>'};
-const TOOLS=[["select","Select & move","V"],["line","Draw lines","L"],["rect","Room (rectangle)","R"],["fill","Fill polygon","F"],["object","Place object","O"],["note","Labels & notes","N"],["tele","Link with teleporter","T"],["pan","Pan","H"]];
+const isLineTool=()=>tool==="line"||tool==="line1";
+const TOOLS=[["select","Select & move","V"],["line","Draw lines (keeps going)","L"],["line1","Single lines (one at a time)","K"],["rect","Room (rectangle)","R"],["fill","Fill polygon","F"],["object","Place object","O"],["note","Labels & notes","N"],["tele","Link with teleporter","T"],["pan","Pan","H"]];
 function renderTools(){
   const el=$("tools");el.innerHTML="";
-  for(const [id,label,k] of TOOLS){const b=document.createElement("button");b.className="tool";b.title=`${label} (${k})`;b.setAttribute("aria-label",label);b.setAttribute("aria-pressed",tool===id);
+  for(const [id,label,k] of TOOLS){const b=document.createElement("button");b.className="tool";b.dataset.tool=id;b.title=`${label} (${k})`;b.setAttribute("aria-label",label);b.setAttribute("aria-pressed",tool===id);
     b.innerHTML=`<svg viewBox="0 0 24 24">${ICONS[id]}</svg><span class="k">${k}</span>`;b.onclick=()=>setTool(id);el.appendChild(b);}
   el.appendChild(document.createElement("hr"));
   for(const [id,label,fn] of [["zin","Zoom in",()=>zoomBy(1.3)],["zout","Zoom out",()=>zoomBy(1/1.3)],["fit","Fit level (0)",fitView]]){
@@ -1409,7 +1419,8 @@ function renderTools(){
 }
 const HINTS={
   select:"Click to select. Drag points, polygons or objects to move them. Shift-click adds polygons. Drag empty space to pan. [ ] nudge floor, Alt+[ ] ceiling.",
-  line:"Click to place corners. Lines snap to points and the grid and split existing lines. Close a loop to fill it.",
+  line:"Click to place corners: the line keeps going from the last point. Double-click or Enter stops it. Close a loop to fill it.",
+  line1:"Single lines, like the original Forge: click where a line starts, then where it ends. Click again to start the next line.",
   rect:"Drag to draw a rectangular room. Rooms that touch share walls automatically and become doorways.",
   fill:"Click inside a closed loop of lines to turn it into a polygon.",
   object:"Click inside a polygon to place the object chosen above. Drag while placing to set its facing.",
@@ -1428,8 +1439,8 @@ function renderOptbar(){
   const grid=document.createElement("label");grid.innerHTML='<span class="lbl">Grid</span>';grid.appendChild(sel_("optGrid",GRIDS,opts.grid,v=>{opts.grid=+v;savePrefs();redraw();}));el.appendChild(grid);
   const sn=document.createElement("label");sn.innerHTML=`<input type="checkbox" id="optSnap" ${opts.snap?"checked":""}> Snap`;sn.querySelector("input").onchange=e=>{opts.snap=e.target.checked;savePrefs();};el.appendChild(sn);
   const sv=document.createElement("label");sv.innerHTML=`<input type="checkbox" id="optVals" ${opts.showValues?"checked":""}> Values`;sv.querySelector("input").onchange=e=>{opts.showValues=e.target.checked;savePrefs();redraw();};el.appendChild(sv);
-  if(tool==="line"){const af=document.createElement("label");af.innerHTML=`<input type="checkbox" id="optAuto" ${opts.autoFill?"checked":""}> Fill closed loops`;af.querySelector("input").onchange=e=>{opts.autoFill=e.target.checked;savePrefs();};el.appendChild(af);}
-  if(tool==="rect"||tool==="fill"||tool==="line"){
+  if(isLineTool()){const af=document.createElement("label");af.innerHTML=`<input type="checkbox" id="optAuto" ${opts.autoFill?"checked":""}> Fill closed loops`;af.querySelector("input").onchange=e=>{opts.autoFill=e.target.checked;savePrefs();};el.appendChild(af);}
+  if(tool==="rect"||tool==="fill"||isLineTool()){
     for(const [key,lab] of [["newFloor","Floor"],["newCeil","Ceiling"]]){const l=document.createElement("label");l.innerHTML=`<span class="lbl">${lab}</span>`;const i=document.createElement("input");i.type="number";i.step="0.125";i.id="opt"+key;i.value=(opts[key]/WU).toFixed(3);i.title=`New ${lab.toLowerCase()} height in world units (rooms touching another copy its heights)`;i.onchange=()=>{opts[key]=Math.round(parseFloat(i.value||0)*WU);};l.appendChild(i);el.appendChild(l);}
   }
   if(tool==="object"){
@@ -1497,7 +1508,7 @@ function renderPane(){
     for(const [l,t] of [["Draw a room","rect"],["Draw lines","line"],["Place objects","object"]])g.appendChild(button(l,()=>setTool(t)));
     g.appendChild(button("Generate a level…",openGenerate,"primary"));
     p.appendChild(g);
-    const k=group("Shortcuts");const n2=document.createElement("p");n2.className="note";n2.innerHTML="V select · L lines · R room · F fill · O objects · N labels · H pan<br>1–7 view modes · G snap · 0 fit · Tab visual view<br>Delete removes · Shift+Delete removes a room and its walls<br>Ctrl+Z undo · Ctrl+Shift+Z redo · Ctrl+A select all";k.appendChild(n2);p.appendChild(k);
+    const k=group("Shortcuts");const n2=document.createElement("p");n2.className="note";n2.innerHTML="V select · L lines · K single lines · R room · F fill · O objects · N labels · T teleporter · H pan<br>Mouse wheel (Draw view) changes tool · Ctrl+wheel zooms<br>1–7 view modes · G snap · 0 fit · Tab visual view<br>Delete removes · Shift+Delete removes a room and its walls<br>Ctrl+Z undo · Ctrl+Shift+Z redo · Ctrl+A select all";k.appendChild(n2);p.appendChild(k);
     return;}
   const items=sel.items,one=items[0];
   if(sel.kind==="poly"){

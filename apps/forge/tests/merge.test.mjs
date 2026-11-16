@@ -301,3 +301,27 @@ test("Network setup: the item editor and the player-start teams (incl. Random) r
   assert.equal(r.row[0] & 1, 1);
   assert.equal(r.team, -1);
 });
+
+test("Draw view: the mouse wheel steps through the tools, Ctrl+wheel zooms; single lines stop after each line", async () => {
+  const { page } = app;
+  await page.evaluate(() => { const f = window.__forge; f.setDoc(f.newDoc("inf")); f.setTool("select"); });
+  const box = await page.locator("#map").boundingBox();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const tools = [];
+  for (let i = 0; i < 3; i++) { await page.mouse.wheel(0, 100); tools.push(await page.evaluate(() => document.querySelector("#tools [aria-pressed=true]")?.dataset.tool || null)); }
+  const s0 = await page.evaluate(() => window.__forge.view.scale);
+  await page.keyboard.down("Control"); await page.mouse.wheel(0, -100); await page.keyboard.up("Control");
+  const s1 = await page.evaluate(() => window.__forge.view.scale);
+  // single lines: two clicks make one line, the third click starts a new one (no line from the last end)
+  await page.evaluate(() => window.__forge.setTool("line1"));
+  const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
+  await page.mouse.click(cx - 100, cy); await page.mouse.click(cx, cy); await page.mouse.click(cx, cy + 100);
+  const n1 = await page.evaluate(() => window.__forge.doc.lines.length);
+  await page.mouse.click(cx + 100, cy + 100);
+  const n2 = await page.evaluate(() => window.__forge.doc.lines.length);
+  await page.keyboard.press("Escape");
+  assert.ok(s1 > s0, "Ctrl+wheel zoomed in");
+  assert.equal(n1, 1);
+  assert.equal(n2, 2);
+  assert.deepEqual(tools, ["line", "line1", "rect"]);
+});
