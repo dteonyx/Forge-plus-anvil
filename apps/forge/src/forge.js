@@ -1328,14 +1328,14 @@ canvas.addEventListener("pointerup",endPointer);canvas.addEventListener("pointer
 canvas.addEventListener("pointerleave",()=>{if(hover){hover=null;redraw();}});
 canvas.addEventListener("contextmenu",e=>e.preventDefault());
 canvas.addEventListener("dblclick",()=>{if(isLineTool()&&chain.length){chain=[];status("Line finished.");redraw();}});
-// In the Draw view the mouse wheel steps through the tools (Ctrl+wheel or a pinch zooms); in the other views it zooms
+// The mouse wheel zooms; Ctrl+wheel steps through the tools. A trackpad pinch (also sent as Ctrl+wheel, in small steps) still zooms.
 let toolWheel=0;
 canvas.addEventListener("wheel",e=>{e.preventDefault();
   if(e.shiftKey){view.cx+=e.deltaY/view.scale;redraw();return;}
-  if(opts.viewMode==="draw"&&!e.ctrlKey&&!e.metaKey&&!placing){const dy=e.deltaMode===1?e.deltaY*40:e.deltaY;
-    if(Math.sign(dy)!==Math.sign(toolWheel))toolWheel=0;toolWheel+=dy;const step=Math.abs(dy)>=50?Math.sign(dy):Math.trunc(toolWheel/80);if(!step)return;toolWheel=0;
+  if((e.ctrlKey||e.metaKey)&&!placing&&(e.deltaMode===1||Math.abs(e.deltaY)>=50)){const dy=e.deltaMode===1?e.deltaY*40:e.deltaY;
+    const step=Math.sign(dy);if(!step)return;
     const ids=TOOLS.map(t=>t[0]);const i=ids.indexOf(tool);const n=ids[((i+Math.sign(step))%ids.length+ids.length)%ids.length];setTool(n);
-    const t=TOOLS.find(x=>x[0]===n);status(`${t[1]} (${t[2]}). Mouse wheel: next tool · Ctrl+wheel zooms`);return;}
+    const t=TOOLS.find(x=>x[0]===n);status(`${t[1]} (${t[2]}). Ctrl+wheel: next tool · wheel zooms`);return;}
   const before=toW(e.offsetX,e.offsetY);const f=Math.exp(-e.deltaY*(e.ctrlKey?0.01:0.0015));
   view.scale=clamp(view.scale*f,2/WU,400/WU);const after=toW(e.offsetX,e.offsetY);view.cx+=before.x-after.x;view.cy+=before.y-after.y;updateStatus();redraw();},{passive:false});
 function zoomBy(f){view.scale=clamp(view.scale*f,2/WU,400/WU);updateStatus();redraw();}
@@ -1508,7 +1508,7 @@ function renderPane(){
     for(const [l,t] of [["Draw a room","rect"],["Draw lines","line"],["Place objects","object"]])g.appendChild(button(l,()=>setTool(t)));
     g.appendChild(button("Generate a level…",openGenerate,"primary"));
     p.appendChild(g);
-    const k=group("Shortcuts");const n2=document.createElement("p");n2.className="note";n2.innerHTML="V select · L lines · K single lines · R room · F fill · O objects · N labels · T teleporter · H pan<br>Mouse wheel (Draw view) changes tool · Ctrl+wheel zooms<br>1–7 view modes · G snap · 0 fit · Tab visual view<br>Delete removes · Shift+Delete removes a room and its walls<br>Ctrl+Z undo · Ctrl+Shift+Z redo · Ctrl+A select all";k.appendChild(n2);p.appendChild(k);
+    const k=group("Shortcuts");const n2=document.createElement("p");n2.className="note";n2.innerHTML="V select · L lines · K single lines · R room · F fill · O objects · N labels · T teleporter · H pan<br>Wheel zooms · Ctrl+wheel changes tool<br>1–7 view modes · G snap · 0 fit · Tab visual view<br>Delete removes · Shift+Delete removes a room and its walls<br>Ctrl+Z undo · Ctrl+Shift+Z redo · Ctrl+A select all";k.appendChild(n2);p.appendChild(k);
     return;}
   const items=sel.items,one=items[0];
   if(sel.kind==="poly"){
