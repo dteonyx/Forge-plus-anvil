@@ -52,6 +52,31 @@ test("exported map re-imports and re-exports byte-identical", async () => {
   assert.ok(same);
 });
 
+test("Checks warns about switches out of reach (Aleph One's 1.5 WU rule) but not recessed ones", async () => {
+  const r = await app.page.evaluate(() => {
+    const f = window.__forge, d0 = f.doc, WU = 1024;
+    f.applySpec({ name: "Reach", environment: "lava", rooms: [
+      { id: "Room", x: 0, y: 0, w: 4, h: 4, floor: 0, ceiling: 3, light: 80 },
+      { id: "Recess", x: 4, y: 1.75, w: 0.5, h: 0.5, floor: 0.5, ceiling: 1, light: 80 } ], objects: [] }, false, "test");
+    const d = f.doc;
+    const at = (x, y) => d.polys.find((q) => { const xs = q.verts.map((v) => v.x), ys = q.verts.map((v) => v.y); return Math.min(...xs) < x * WU && Math.max(...xs) > x * WU && Math.min(...ys) < y * WU && Math.max(...ys) > y * WU; });
+    const edge = (q, test) => { for (let k = 0; k < q.verts.length; k++) { const a = q.verts[k], b = q.verts[(k + 1) % q.verts.length]; if (test(a, b)) return a.id + ">" + b.id; } };
+    const room = at(2, 2), rec = at(4.25, 2);
+    const tall = edge(room, (a, b) => a.y === 0 && b.y === 0);
+    const deep = edge(rec, (a, b) => a.x === 4.5 * WU && b.x === 4.5 * WU);
+    const count = () => f.validate().filter((i) => /can't be reached/.test(i.title)).length;
+    d.sides.set(tall, { full: { b: 0 }, panel: { type: 15, perm: 1, flags: 0 } });
+    const onTall = count();
+    d.sides.delete(tall);
+    d.sides.set(deep, { full: { b: 0 }, panel: { type: 15, perm: 1, flags: 0 } });
+    const inRecess = count();
+    return { onTall, inRecess, found: !!(room && rec && tall && deep) };
+  });
+  assert.ok(r.found);
+  assert.equal(r.onTall, 1, "a switch on a 3 WU tall wall is out of reach");
+  assert.equal(r.inRecess, 0, "a switch at the back of a small recess is fine");
+});
+
 test("a level made for the Unreal remake can go past Aleph One's edge (FP32 chunk)", async () => {
   const r = await app.page.evaluate(() => {
     const f = window.__forge, WU = 1024;

@@ -327,7 +327,12 @@ function validate(){
     for(const id of r.picts||[])if(id&&!pictureById(id))out.push({lv:"warn",title:`Terminal ${i} shows picture ${id}, which isn't in the scenario`,detail:"Add it in Pictures (Levels tab), or the game shows nothing there."});});
   for(const [k,sd] of doc.sides){if(!sd.panel)continue;const key=panelKeyOf(sd.panel.type);
     if(key==="terminal"&&sd.panel.perm>=(doc.terms||[]).length)out.push({lv:"warn",title:`A terminal panel uses terminal ${sd.panel.perm}, which doesn't exist`,detail:`This level has ${(doc.terms||[]).length} terminal${(doc.terms||[]).length===1?"":"s"}. Add one in the Level tab.`});
-    if(key==="platform"&&sd.panel.perm>=0){const q=doc.polys[sd.panel.perm];if(!q||q.type!==5)out.push({lv:"warn",title:`A platform switch points at polygon ${sd.panel.perm}, which isn't a door or lift`,detail:"Right-click the switch in the visual view and set the right polygon number."});}}
+    if(key==="platform"&&sd.panel.perm>=0){const q=doc.polys[sd.panel.perm];if(!q||q.type!==5)out.push({lv:"warn",title:`A platform switch points at polygon ${sd.panel.perm}, which isn't a door or lift`,detail:"Right-click the switch in the visual view and set the right polygon number."});}
+    {const [ai,bi]=k.split(">");const pa=doc.pts.find(p=>String(p.id)===ai),pb=doc.pts.find(p=>String(p.id)===bi);
+      const shot=sd.panel.flags&(0x08|0x40); // switches you shoot don't need to be in reach
+      const r=pa&&pb&&!shot?panelReach(doc,pa,pb):null;if(r!=null&&r>=PANEL_REACH){const l=doc.lines.find(l=>(l.a===pa&&l.b===pb)||(l.a===pb&&l.b===pa));
+        const name=(panelList(doc.info.env).find(p=>p.type===sd.panel.type)||{label:"Control panel"}).label;
+        out.push({lv:"warn",title:`${name} can't be reached in the game`,detail:`Aleph One only lets you use a switch or terminal within 1.5 WU of the middle of its wall, and height counts double. The best spot here is ${r===Infinity?"nowhere":r.toFixed(2)+" WU"} away. Put it in a small recess like Bungie's: a short wall (about 0.5 to 1 WU wide) whose opening is about 1 WU tall, starting about 0.25 WU above the floor.`,target:l?{kind:"line",items:[l]}:undefined});}}}
   {const past=pastMapEdge();
     if(doc.info.target==="unreal"){if(past.length)out.push({lv:"warn",title:"Won't play in Aleph One or Alpha One",detail:`Made for the Unreal remake: ${past.map(p=>p.what).join(", ")} go past Aleph One's edge (about 32 WU from the centre). The full size is saved in an extra part of the map file that only the Unreal remake reads.`,target:{kind:past[0].kind,items:past[0].items}});}
     else limitIssues(out);}
@@ -825,6 +830,28 @@ function pastMapEdge(d=doc){const out=(v)=>Math.abs(Math.round(v))>MAP_EDGE&&Mat
   const objs=d.objs.filter(o=>out(o.x)||out(o.y)||out(o.z|0)),notes=(d.notes||[]).filter(n=>out(n.x)||out(n.y));
   const r=[];if(pts.length)r.push({what:"points",items:pts,kind:"point"});if(high.length)r.push({what:"heights",items:high,kind:"poly"});
   if(objs.length)r.push({what:"objects",items:objs,kind:"obj"});if(notes.length)r.push({what:"notes",items:notes,kind:"note"});return r;}
+// =============================================================== control panel reach (Aleph One's rule)
+// devices.cpp: a switch or terminal works only if the distance from the player's middle (feet + half of 0.8 WU)
+// to the middle of its line (halfway between the line's highest floor and lowest ceiling) is under 1.5 WU,
+// with the height difference counted twice. Returns the best distance any standing spot can get (WU), or null.
+const PANEL_REACH=1.5,PLAYER_R=0.25,PLAYER_HALF=0.4;
+// The middle of a panel's line as Aleph One measures it (map units)
+function panelMid(d,a,b){let q=null,n=null;for(const p of d.polys)p.verts.forEach((v,k)=>{const w=p.verts[(k+1)%p.verts.length];if(v===a&&w===b)q=p;if(v===b&&w===a)n=p;});
+  if(!q)return null;return {x:(a.x+b.x)/2,y:(a.y+b.y)/2,z:((n?Math.max(q.floor,n.floor):q.floor)+(n?Math.min(q.ceil,n.ceil):q.ceil))/2};}
+function panelReach(d,a,b){
+  const own=new Map();for(const q of d.polys)q.verts.forEach((v,k)=>own.set(v.id+">"+q.verts[(k+1)%q.verts.length].id,q));
+  const q=own.get(a.id+">"+b.id);if(!q)return null;const n=own.get(b.id+">"+a.id);
+  const mz=((n?Math.max(q.floor,n.floor):q.floor)+(n?Math.min(q.ceil,n.ceil):q.ceil))/2/WU;
+  const mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
+  // where the player can stand: the panel's polygon and anything within two steps of it (a recess is usually a small
+  // polygon too short to enter, with the room in front of it)
+  const near=new Set([q]);let ring=[q];
+  for(let step=0;step<2;step++){const next=[];for(const p of ring)p.verts.forEach((v,k)=>{const c=own.get(p.verts[(k+1)%p.verts.length].id+">"+v.id);if(c&&!near.has(c)){near.add(c);next.push(c);}});ring=next;}
+  const cands=[...near].map(c=>{let dd=Infinity;c.verts.forEach((u,j)=>{dd=Math.min(dd,distSeg({x:mx,y:my},u,c.verts[(j+1)%c.verts.length]));});
+    return [c,c===q?PLAYER_R:Math.max(PLAYER_R,dd/WU)];});
+  let best=Infinity;
+  for(const [c,h] of cands){if(c.ceil-c.floor<0.8*WU)continue;const dz=2*(c.floor/WU+PLAYER_HALF-mz);best=Math.min(best,Math.hypot(h,dz));}
+  return best;}
 function buildWadFile(chunks,name,dataVersion=1){
   const entry=new BW();let off=0;
   chunks.forEach(([t,data],i)=>{entry.i32(tag(t));const last=i===chunks.length-1;entry.i32(last?0:off+16+data.length);entry.i32(data.length);entry.i32(0);entry.bytes(data);off+=16+data.length;});
@@ -2525,6 +2552,9 @@ function open3D(at={}){
         if(pq&&dd<bpd&&q!==here()){bp=pq;bpd=dd;}});}
       if(bs)side=bs;else if(bp)plat=bp;}
     if(side){const pn=sideGet(side[0],side[1]).panel;const key=panelKeyOf(pn.type);
+      // Aleph One's reach: under 1.5 WU from the player's middle to the middle of the line, height counted twice
+      if(!(pn.flags&(0x08|0x40))){const m=panelMid(doc,side[0],side[1]);if(m){const g=Math.hypot((st.x-m.x)/WU,(st.y-m.y)/WU,2*((st.feet+PLAYER_HALF*WU-m.z)/WU));
+        if(g>=PANEL_REACH){say(`Out of reach in the game: ${g.toFixed(2)} WU from the middle of this panel (it needs under 1.5, height counts double). Checks explains the fix.`);return;}}}
       if(key==="platform"){const t=plats.get(doc.polys[pn.perm]);if(t){platToggle(t);say(`Switch: platform ${pn.perm} ${t.active?"started":"stopped"}`);}else say(`This switch points at polygon ${pn.perm}, which isn't a door or lift`);return;}
       if(key==="tag"){const ts=[...plats.values()].filter(p=>p.tag===pn.perm&&pn.perm);ts.forEach(platToggle);say(ts.length?`Tag switch ${pn.perm}: ${ts.length} platform${ts.length>1?"s":""}`:`Tag switch ${pn.perm}: no platform uses this tag`);return;}
       if(key==="terminal"){say(`Terminal ${pn.perm} (terminals aren't shown in the visual view yet)`);return;}
